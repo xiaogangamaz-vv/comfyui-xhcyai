@@ -1,7 +1,7 @@
 # comfyui-xhcyai
 
 XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
-同一家族的模型合成一个节点，节点里用下拉切换变体。
+同一家族的模型合成一个节点，节点里用下拉切换变体；图像节点同时支持**文生图**和**多图参考**。
 
 ## 安装
 
@@ -23,7 +23,7 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 | 节点 | 说明 |
 | --- | --- |
-| **XHCY GPT Image 2.5（文生图）** | 走 `POST /v1/images/generations`，下拉切换 `gpt-image-2.5` / `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` |
+| **XHCY GPT Image 2.5（文生图 / 多图参考）** | 一个节点两种用法：不接参考图 = 文生图，接 `image1`~`image16` = 多图参考。下拉切换 `gpt-image-2.5` / `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` |
 | **XHCY MiniMax H3（文生视频）** | 走 `POST /v1/video/generations`，下拉切换 `MiniMax-H3` / `MiniMax-H3-Max` / `MiniMax-H3-Lite` |
 | comfyui xinghuo nano banana | Nano Banana 系列（原有节点，独立于本站服务配置） |
 
@@ -31,20 +31,30 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 | 输入 | 说明 |
 | --- | --- |
-| `prompt` | 图片描述，必填 |
+| `prompt` | 提示词，必填 |
 | `model` | 家族变体：`gpt-image-2.5`（仅 1k）/ `-flare`（到 4k，质量到 high）/ `-sunburst`（到 4k，质量到 max） |
 | `api_key` | XHCY AI 访问密钥，每个节点单独填 |
 | `aspect_ratio` | 画幅比例，`auto` 表示交给服务端决定 |
 | `resolution` | `1k` / `2k` / `4k`，节点内部换算成接口要求的像素 `size` |
 | `quality` | `auto` / `low` / `medium` / `high` / `xhigh` / `max` |
+| `image1` ~ `image16` | **可选**。一个都不接 = 文生图；接 1 张以上 = 多图参考。会自动缩到长边 ≤1536 并转 JPEG 后上传 |
 | `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔 |
 | `base_url` | 站点地址，一般不用改 |
 
 | 输出 | 说明 |
 | --- | --- |
 | `image` | 生成结果，可直接接 `SaveImage` / `PreviewImage` |
-| `status` | 结果摘要（模型、画幅、任务号、文件路径） |
+| `status` | 结果摘要（模式、模型、画幅、任务号、文件路径） |
 | `saved_paths` | 落盘文件的完整路径 |
+
+#### 两种用法
+
+- **文生图**：只填 `prompt`，参考图一个都不连。
+- **多图参考**：把参考图接到 `image1`、`image2` …，提示词描述「要拿这些图做什么」。
+  实测接 2 张 512×512 参考图，生成结果正确合并了两张图的元素。
+
+> **参考图越多越慢**：实测带 1 张参考图约 80 秒，而网关的等待上限约 100 秒。
+> 建议一次不超过 3～4 张；真超时了节点会明确提示（HTTP 524），不会静默失败。
 
 ### XHCY MiniMax H3 参数
 
@@ -68,16 +78,35 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 ## 实现说明
 
 - **站点当前禁用了异步图像生成**：带 `async: true` 的请求会被直接拒绝
-  （HTTP 400 `async image generation is disabled`，已实测确认），因此节点走**同步提交**。
+  （HTTP 400 `async image generation is disabled`，已实测确认），因此图像节点走**同步提交**。
   若服务端返回 task id，节点会自动切换为轮询 `GET /v1/images/tasks/{task_id}`。
+- **多图参考的传参规则**（实测确定）：参考图必须以 **base64 data URI** 放进 `image` 数组，
+  走 `POST /v1/images/generations`；传公网 URL 会被上游拒绝（HTTP 400）。
+  站点的 `/v1/images/edits` 目前未实现（HTTP 501）。
+- 参考图会自动缩到长边 ≤1536 并转成 JPEG（quality 90）后再上传——实测大体积 data URI
+  会让整个请求撞上网关超时（HTTP 524）。
 - 尺寸在节点内由 `(画幅比例, 分辨率)` 换算成像素尺寸，接口只接受像素格式。
-- 失败一律抛出可读中文错误（密钥失效、余额不足、内容审核未通过等），不会把坏图当成功返回。
+- 失败一律抛出可读中文错误（密钥失效、余额不足、内容审核未通过、网关超时等），不会把坏图当成功返回。
 - **视频走异步**：`POST /v1/video/generations` 返回 `task_id` 后轮询
   `GET /v1/video/generations/{task_id}`，状态依次为 `queued → processing → succeeded`，
   成功后产物在 `content.url`。
 - **视频产物需要鉴权**：该地址属于站点自身的 `/v1` 路径，节点会在下载时自动带上密钥
   （已实测：不带密钥返回 HTTP 401）。图片地址来自公开 CDN，则不会附带密钥。
 - 视频以 ComfyUI 官方 **VIDEO** 类型输出，可直接接 `SaveVideo` / `PreviewVideo`。
+
+## 新增图像模型（套用模板）
+
+图像节点的公共逻辑全部集中在 `xhcy_image_base.py` 的 `XHCYImageBase`：
+多图参考、提交、轮询、落盘、错误翻译都在基类里。
+新增一个图像模型只需要复制 `nodes_gpt_image_25.py`，改这几处常量：
+
+| 常量 | 作用 |
+| --- | --- |
+| `VARIANT_MODELS` | 下拉里出现的模型名 |
+| `RATIOS` / `RESOLUTIONS` / `SIZE_MAP` | 画幅比例、分辨率档位、以及两者的像素换算表 |
+| `RESOLUTION_LIMITS` / `QUALITIES` | 各变体支持的分辨率与画质档 |
+| `NODE_ID` / `OUTPUT_PREFIX` | 节点唯一 ID 与落盘文件名前缀 |
+| `NODE_DISPLAY_NAME_MAPPINGS` | 节点在面板里的显示名 |
 
 ## 自测
 
