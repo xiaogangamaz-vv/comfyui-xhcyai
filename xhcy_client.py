@@ -123,12 +123,12 @@ class XHCYClient:
             raise XHCYError(f"{context}网络失败，请检查网络后重试") from exc
         return self._parse(response, context)
 
-    def download(self, url: str, max_bytes: int = 64 * 1024 * 1024) -> bytes:
-        """Fetch a generated artifact. The platform hosts these bytes itself."""
+    def download(self, url: str, max_bytes: int = 256 * 1024 * 1024) -> bytes:
+        """Fetch a generated artifact. Video content lives behind our own /v1 path and needs the bearer token; image URLs are public."""
         if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://")):
             raise XHCYError("服务端返回的产物地址无效")
         try:
-            response = requests.get(url, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True)
+            response = requests.get(url, headers=(self._headers if url.startswith(self.base_url) else None), timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True)
         except requests.Timeout as exc:
             raise XHCYError("产物下载超时，请稍后重试") from exc
         except requests.RequestException as exc:
@@ -142,7 +142,7 @@ class XHCYClient:
                 continue
             total += len(chunk)
             if total > max_bytes:
-                raise XHCYError("产物超过节点允许的下载上限（64 MiB）")
+                raise XHCYError("产物超过节点允许的下载上限（%d MiB）" % (max_bytes // (1024 * 1024)))
             chunks.append(chunk)
         return b"".join(chunks)
 
@@ -168,6 +168,12 @@ class XHCYClient:
 
     def poll_image(self, task_id: str) -> dict[str, Any]:
         return self.get_json(IMAGE_TASK_PATH.format(task_id=task_id), "图像结果查询")
+
+    def submit_video(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.post_json(VIDEO_GENERATIONS_PATH, payload, "视频生成请求")
+
+    def poll_video(self, task_id: str) -> dict[str, Any]:
+        return self.get_json(VIDEO_TASK_PATH.format(task_id=task_id), "视频结果查询")
 
 
 # ---------------------------------------------------------------------- #
@@ -227,6 +233,28 @@ def extract_image_urls(payload: dict[str, Any]) -> list[str]:
     for container in containers:
         collect(container)
     return urls
+
+
+def extract_video_url(payload: dict[str, Any]) -> str:
+    """Video tasks answer {"status": "succeeded", "content": {"url": ...}}."""
+    content = payload.get("content")
+    if isinstance(content, dict):
+        for key in ("url", "video_url"):
+            if content.get(key):
+                return str(content[key])
+    elif isinstance(content, str) and content.startswith("http"):
+        return content
+    elif isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict):
+                value = item.get("url") or item.get("video_url")
+                if value:
+                    return str(value)
+    for key in ("video_url", "url"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+    return ""
 
 
 def extract_failure_reason(payload: dict[str, Any]) -> str:
