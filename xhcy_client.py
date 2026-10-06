@@ -63,6 +63,8 @@ def _http_error(response: requests.Response, context: str) -> XHCYError:
         return XHCYError(f"接口或资源不存在（HTTP 404）{suffix}")
     if code == 429:
         return XHCYError("请求过于频繁（HTTP 429），请稍后重试")
+    if code == 524:
+        return XHCYError("服务端处理超时（HTTP 524，网关等待上限约 100 秒）。带参考图的生成明显更慢，实测单图约 80 秒，请减少参考图数量或缩小分辨率后重试")
     if code >= 500:
         return XHCYError(f"服务端暂时不可用（HTTP {code}），请稍后重试")
     return XHCYError(f"{context}失败（HTTP {code}）{suffix}")
