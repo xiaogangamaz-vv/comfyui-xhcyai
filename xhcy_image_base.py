@@ -170,6 +170,10 @@ class XHCYImageBase:
     DEFAULT_SIZE = "1024x1024"
     DEFAULT_RATIO = "1:1"
     DEFAULT_RESOLUTION = "1k"
+    # 参数开关，由子类决定节点上出现哪些尺寸控件：
+    #   FIXED_SIZE 非空 -> 不显示 aspect_ratio / resolution，固定使用该像素尺寸
+    #   QUALITIES 为空列表 -> 不显示 quality
+    FIXED_SIZE = ""
     NODE_ID = "xhcy_image_base"
     OUTPUT_PREFIX = "xhcy_image"
 
@@ -225,18 +229,7 @@ class XHCYImageBase:
                         "tooltip": "XHCY AI 访问密钥。每个节点单独填。",
                     },
                 ),
-                "aspect_ratio": (
-                    list(cls.RATIOS),
-                    {"default": cls.DEFAULT_RATIO, "tooltip": "auto 表示交给服务端决定画幅。"},
-                ),
-                "resolution": (
-                    list(cls.RESOLUTIONS),
-                    {"default": cls.DEFAULT_RESOLUTION, "tooltip": "分辨率档位，节点会换算成接口要求的像素尺寸。"},
-                ),
-                "quality": (
-                    list(cls.QUALITIES),
-                    {"default": "auto", "tooltip": "画质档位；auto 表示不指定。"},
-                ),
+                **cls.shape_inputs(),
                 "max_poll_attempts": (
                     "INT",
                     {"default": 60, "min": 1, "max": 600, "tooltip": "最多查询多少次结果。"},
@@ -260,6 +253,33 @@ class XHCYImageBase:
     # ------------------------------------------------------------------ #
     # Helpers subclasses may override
     # ------------------------------------------------------------------ #
+
+    @classmethod
+    def shape_inputs(cls) -> dict:
+        """节点上要出现哪些尺寸控件；子类用 FIXED_SIZE / QUALITIES 关掉。
+
+        有些模型只接受一个固定尺寸（例如 nano-banana 系列只吃 1024x1024），
+        这种节点就不该摆一堆用不上的下拉。
+        """
+        inputs: dict = {}
+        if not cls.FIXED_SIZE:
+            inputs["aspect_ratio"] = (
+                list(cls.RATIOS),
+                {"default": cls.DEFAULT_RATIO, "tooltip": "auto 表示交给服务端决定画幅。"},
+            )
+            inputs["resolution"] = (
+                list(cls.RESOLUTIONS),
+                {
+                    "default": cls.DEFAULT_RESOLUTION,
+                    "tooltip": "分辨率档位，节点会换算成接口要求的像素尺寸。",
+                },
+            )
+        if cls.QUALITIES:
+            inputs["quality"] = (
+                list(cls.QUALITIES),
+                {"default": "auto", "tooltip": "画质档位；auto 表示不指定。"},
+            )
+        return inputs
 
     @classmethod
     def resolve_size(cls, aspect_ratio: str, resolution: str) -> str:
@@ -303,23 +323,28 @@ class XHCYImageBase:
     # Main entry point
     # ------------------------------------------------------------------ #
 
-    def generate(self, prompt, model, api_key, aspect_ratio, resolution, quality,
-                 max_poll_attempts, poll_interval, base_url=DEFAULT_BASE_URL, **kwargs):
+    def generate(self, prompt, model, api_key, max_poll_attempts, poll_interval,
+                 base_url=DEFAULT_BASE_URL,
+                 aspect_ratio="1:1", resolution="1k", quality="auto", **kwargs):
         prompt = (prompt or "").strip()
         if not prompt:
             raise XHCYError("提示词（prompt）不能为空")
         if self.VARIANT_MODELS and model not in self.VARIANT_MODELS:
             raise XHCYError(f"未知的模型：{model}")
 
-        allowed = self.allowed_resolutions(model)
-        if aspect_ratio != "auto" and resolution not in allowed:
-            raise XHCYError(
-                f"{model} 不支持 {resolution} 分辨率；可选：{'、'.join(allowed)}"
-            )
+        if self.FIXED_SIZE:
+            # 该模型只有一个固定尺寸（例如 nano-banana 只吃 1024x1024）
+            size = self.FIXED_SIZE
+        else:
+            allowed = self.allowed_resolutions(model)
+            if aspect_ratio != "auto" and resolution not in allowed:
+                raise XHCYError(
+                    f"{model} 不支持 {resolution} 分辨率；可选：{'、'.join(allowed)}"
+                )
+            size = self.resolve_size(aspect_ratio, resolution)
 
         attempts = _int_param(max_poll_attempts, "最大查询次数", 1, 600)
         interval = _int_param(poll_interval, "查询间隔", 1, 60)
-        size = self.resolve_size(aspect_ratio, resolution)
 
         check_interrupt()
         references = self.collect_reference_images(kwargs)
@@ -358,12 +383,17 @@ class XHCYImageBase:
             raise XHCYError("服务端返回了尺寸不一致的多张图片，无法合并成一批")
 
         mode_text = f"多图参考（{len(references)} 张）" if references else "文生图"
+        size_text = (
+            f"尺寸：{size}"
+            if self.FIXED_SIZE
+            else f"画幅：{aspect_ratio} @ {resolution}（{size}）"
+        )
         task_id = extract_task_id(result) or extract_task_id(first) or "-"
         summary = (
             f"XHCY 生成成功\n"
             f"模式：{mode_text}\n"
             f"模型：{model}\n"
-            f"画幅：{aspect_ratio} @ {resolution}（{size}）\n"
+            f"{size_text}\n"
             f"任务：{task_id}\n"
             f"张数：{len(paths)}\n"
             f"文件：\n" + "\n".join(paths)
