@@ -24,8 +24,9 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | 节点 | 说明 |
 | --- | --- |
 | **XHCY GPT Image 2.5（文生图 / 多图参考）** | 一个节点两种用法：不接参考图 = 文生图，接 `image1`~`image16` = 多图参考。下拉切换 `gpt-image-2.5` / `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` |
+| **XHCY Nano Banana（文生图 / 多图参考）** | 同样两种用法。下拉切换 `nano-banana-2` / `nano-banana-pro` / `nano-banana-fast`。该家族**只支持 1024x1024**，所以节点上不显示画幅 / 分辨率 / 画质下拉 |
 | **XHCY MiniMax H3（文生视频）** | 走 `POST /v1/video/generations`，下拉切换 `MiniMax-H3` / `MiniMax-H3-Max` / `MiniMax-H3-Lite` |
-| comfyui xinghuo nano banana | Nano Banana 系列（原有节点，独立于本站服务配置） |
+| comfyui xinghuo nano banana | 旧节点（打的是另一家服务，与本站无关，保留兼容） |
 
 ### XHCY GPT Image 2.5 参数
 
@@ -55,6 +56,22 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 > **参考图越多越慢**：实测带 1 张参考图约 80 秒，而网关的等待上限约 100 秒。
 > 建议一次不超过 3～4 张；真超时了节点会明确提示（HTTP 524），不会静默失败。
+
+### XHCY Nano Banana 参数
+
+| 输入 | 说明 |
+| --- | --- |
+| `prompt` | 提示词，必填 |
+| `model` | `nano-banana-2`（推荐，实测最稳）/ `nano-banana-pro` / `nano-banana-fast` |
+| `api_key` | XHCY AI 访问密钥，每个节点单独填 |
+| `image1` ~ `image16` | **可选**。一个都不接 = 文生图；接 1 张以上 = 多图参考 |
+| `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔 |
+| `base_url` | 站点地址，一般不用改 |
+
+输出与 GPT Image 2.5 相同（`image` / `status` / `saved_paths`）。
+
+> 该家族**只接受 `1024x1024`**（实测传 `2048x2048` 会返回 `size_not_supported`），
+> 也没有画质档，所以节点上不会出现画幅 / 分辨率 / 画质这些用不上的下拉。
 
 ### XHCY MiniMax H3 参数
 
@@ -104,7 +121,8 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | --- | --- |
 | `VARIANT_MODELS` | 下拉里出现的模型名 |
 | `RATIOS` / `RESOLUTIONS` / `SIZE_MAP` | 画幅比例、分辨率档位、以及两者的像素换算表 |
-| `RESOLUTION_LIMITS` / `QUALITIES` | 各变体支持的分辨率与画质档 |
+| `RESOLUTION_LIMITS` / `QUALITIES` | 各变体支持的分辨率与画质档；`QUALITIES = []` 表示该模型没有画质档，节点不显示 `quality` |
+| `FIXED_SIZE` | 模型只吃单一尺寸时填，例如 `"1024x1024"`；填了就不显示画幅 / 分辨率下拉 |
 | `NODE_ID` / `OUTPUT_PREFIX` | 节点唯一 ID 与落盘文件名前缀 |
 | `NODE_DISPLAY_NAME_MAPPINGS` | 节点在面板里的显示名 |
 
