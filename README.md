@@ -104,6 +104,9 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | **首尾帧 / 图生视频** | `first_frame`、`last_frame` | 至少接一张。只接 `first_frame` = 以它为开头的图生视频；两张都接 = 从首帧过渡到尾帧 |
 | **多模态参考** | `image1`~`image9`、`video1`~`video3`、`audio1`~`audio3` | 想接哪个接哪个。全都不接 = 纯文生视频 |
 
+> **多图参考的提示词写法**：按顺序用「Image 1」「Image 2」引用对应编号的参考图，
+> 例如「让 Image 1 里的女孩穿上 Image 2 的裙子」。不点名的话，模型不知道哪张是哪个。
+>
 > 素材会被转成 **data URI 内嵌进请求**（站点没有上传接口），所以素材越大、请求越慢。
 > 节点内已做压缩：参考图缩到长边 1536 并转 JPEG，参考视频单条上限 12 MiB，
 > 参考音频转 WAV、上限同为 12 MiB（约 6 分钟）。
