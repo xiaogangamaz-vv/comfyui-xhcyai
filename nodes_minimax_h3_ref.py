@@ -61,7 +61,10 @@ class XHCYMiniMaxH3Reference(XHCYVideoBase):
     DEFAULT_RESOLUTION = "768P"
     DEFAULT_DURATION = 5
     DEFAULT_RATIO = "16:9"
-    PROMPT_TOOLTIP = "描述你要生成的视频。留空会直接报错，不会白白扣费。"
+    PROMPT_TOOLTIP = (
+        "描述你要生成的视频。多张参考图时，在提示词里按顺序用「Image 1」「Image 2」引用它们，"
+        "例如：让 Image 1 里的女孩穿上 Image 2 的裙子。留空会直接报错，不会白白扣费。"
+    )
     NODE_ID = "xhcy_minimax_h3_ref"
     OUTPUT_PREFIX = "xhcy_h3_ref"
     CATEGORY = "XHCY/Video"
@@ -73,7 +76,7 @@ class XHCYMiniMaxH3Reference(XHCYVideoBase):
         for i in range(1, MAX_REF_IMAGES + 1):
             inputs[f"image{i}"] = (
                 "IMAGE",
-                {"tooltip": f"参考图 #{i}。不接任何素材就是纯文生视频。"},
+                {"tooltip": f"参考图 #{i}。提示词里用「Image {i}」引用它。不接任何素材就是纯文生视频。"},
             )
         for i in range(1, MAX_REF_VIDEOS + 1):
             inputs[f"video{i}"] = (
