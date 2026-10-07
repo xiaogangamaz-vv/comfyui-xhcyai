@@ -82,6 +82,12 @@ class XHCYClient:
             raise XHCYError("服务地址必须以 http:// 或 https:// 开头")
         self.api_key = api_key
         self.base_url = base_url
+        # 直连优先：实测本机代理（HTTP_PROXY / HTTPS_PROXY）在请求体稍大时
+        # （例如带参考图、参考视频的请求）会直接掐断连接并报 ProxyError。
+        # 所以默认不走环境代理，只在直连失败时才回退到代理。
+        self._direct = requests.Session()
+        self._direct.trust_env = False
+        self._proxied = requests.Session()
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -98,43 +104,46 @@ class XHCYClient:
             raise XHCYError(f"{context}返回格式异常：期望 JSON 对象")
         return payload
 
+    def _send(self, method: str, path: str, context: str, note: str = "", **kwargs):
+        """直连优先；直连失败才回退到环境代理，两者都失败才报错。
+
+        超时不回退：超时说明已经连上、只是慢，换通道没有意义。
+        """
+        url = path if path.startswith("http") else self.base_url + path
+        last_error: Exception | None = None
+        for session in (self._direct, self._proxied):
+            try:
+                return session.request(
+                    method, url, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), **kwargs
+                )
+            except requests.Timeout as exc:
+                raise XHCYError(f"{context}超时{note}") from exc
+            except requests.RequestException as exc:
+                last_error = exc
+                continue
+        raise XHCYError(f"{context}网络失败，请检查网络后重试") from last_error
+
     def post_json(self, path: str, payload: dict[str, Any], context: str = "请求") -> dict[str, Any]:
-        try:
-            response = requests.post(
-                self.base_url + path,
-                headers=self._headers,
-                json=payload,
-                timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
-            )
-        except requests.Timeout as exc:
-            raise XHCYError(f"{context}超时；任务是否已提交无法确认，请先别急着重复提交") from exc
-        except requests.RequestException as exc:
-            raise XHCYError(f"{context}网络失败，请检查网络后重试") from exc
+        response = self._send(
+            "POST", path, context,
+            note="；任务是否已提交无法确认，请先别急着重复提交",
+            headers=self._headers, json=payload,
+        )
         return self._parse(response, context)
 
     def get_json(self, path: str, context: str = "查询") -> dict[str, Any]:
-        try:
-            response = requests.get(
-                self.base_url + path,
-                headers=self._headers,
-                timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
-            )
-        except requests.Timeout as exc:
-            raise XHCYError(f"{context}超时，请稍后重试") from exc
-        except requests.RequestException as exc:
-            raise XHCYError(f"{context}网络失败，请检查网络后重试") from exc
+        response = self._send("GET", path, context, headers=self._headers)
         return self._parse(response, context)
 
     def download(self, url: str, max_bytes: int = 256 * 1024 * 1024) -> bytes:
         """Fetch a generated artifact. Video content lives behind our own /v1 path and needs the bearer token; image URLs are public."""
         if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://")):
             raise XHCYError("服务端返回的产物地址无效")
-        try:
-            response = requests.get(url, headers=(self._headers if url.startswith(self.base_url) else None), timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), stream=True)
-        except requests.Timeout as exc:
-            raise XHCYError("产物下载超时，请稍后重试") from exc
-        except requests.RequestException as exc:
-            raise XHCYError("产物下载网络失败，请稍后重试") from exc
+        response = self._send(
+            "GET", url, "产物下载", note="，请稍后重试",
+            headers=(self._headers if url.startswith(self.base_url) else None),
+            stream=True,
+        )
         if response.status_code >= 400:
             raise _http_error(response, "产物下载")
         chunks: list[bytes] = []
