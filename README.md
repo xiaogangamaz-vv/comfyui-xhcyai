@@ -26,6 +26,8 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | **XHCY GPT Image 2.5（文生图 / 多图参考）** | 一个节点两种用法：不接参考图 = 文生图，接 `image1`~`image16` = 多图参考。下拉切换 `gpt-image-2.5` / `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` |
 | **XHCY Nano Banana（文生图 / 多图参考）** | 同样两种用法。下拉切换 `nano-banana-2` / `nano-banana-pro` / `nano-banana-fast`。该家族**只支持 1024x1024**，所以节点上不显示画幅 / 分辨率 / 画质下拉 |
 | **XHCY MiniMax H3（文生视频）** | 走 `POST /v1/video/generations`，下拉切换 `MiniMax-H3` / `MiniMax-H3-Max` / `MiniMax-H3-Lite` |
+| **XHCY MiniMax H3（首尾帧 / 图生视频）** | 接 `first_frame` / `last_frame`，让视频从指定画面开始、到指定画面结束；只接一张就是普通图生视频 |
+| **XHCY MiniMax H3（多模态参考）** | 接 `image1`~`image9`（参考图）、`video1`~`video3`（参考视频）、`audio1`~`audio3`（参考音频）；什么都不接就是纯文生视频 |
 | comfyui xinghuo nano banana | 旧节点（打的是另一家服务，与本站无关，保留兼容） |
 
 ### XHCY GPT Image 2.5 参数
@@ -92,6 +94,20 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | `status` | 结果摘要（模型、规格、任务号、文件路径） |
 | `video_path` | 落盘 MP4 的完整路径 |
 
+### XHCY MiniMax H3 首尾帧 / 多模态参考 参数
+
+两个节点共用 H3 家族的 `model` / `resolution` / `duration` / `ratio` / `api_key` 参数，
+只是素材输入不同：
+
+| 节点 | 素材输入 | 说明 |
+| --- | --- | --- |
+| **首尾帧 / 图生视频** | `first_frame`、`last_frame` | 至少接一张。只接 `first_frame` = 以它为开头的图生视频；两张都接 = 从首帧过渡到尾帧 |
+| **多模态参考** | `image1`~`image9`、`video1`~`video3`、`audio1`~`audio3` | 想接哪个接哪个。全都不接 = 纯文生视频 |
+
+> 素材会被转成 **data URI 内嵌进请求**（站点没有上传接口），所以素材越大、请求越慢。
+> 节点内已做压缩：参考图缩到长边 1536 并转 JPEG，参考视频单条上限 12 MiB，
+> 参考音频转 WAV、上限同为 12 MiB（约 6 分钟）。
+
 ## 实现说明
 
 - **站点当前禁用了异步图像生成**：带 `async: true` 的请求会被直接拒绝
@@ -110,6 +126,13 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 - **视频产物需要鉴权**：该地址属于站点自身的 `/v1` 路径，节点会在下载时自动带上密钥
   （已实测：不带密钥返回 HTTP 401）。图片地址来自公开 CDN，则不会附带密钥。
 - 视频以 ComfyUI 官方 **VIDEO** 类型输出，可直接接 `SaveVideo` / `PreviewVideo`。
+- **素材的角色（role）**：首尾帧用 `first_frame` / `last_frame`，多模态参考用
+  `reference_image` / `reference_video` / `reference_audio`，都以 data URI 放进 `content` 数组。
+- **不信任本地代理**：实测本机 `HTTP_PROXY` 在请求体稍大（带参考素材）时会直接掐断连接并报
+  `ProxyError`，而同一请求直连正常。因此客户端**默认直连**，只有直连失败才回退到环境代理。
+- 站点目前**没有**「视频再生成（768P→2K）」和「Context-IR 提示词增强」的接口：
+  相关路径全部返回 404，也没有对应的模型名（`MiniMax-H3-Context-IR` 会报
+  `no available channel`）。计费表里虽有这两项 SKU，但功能尚未开放。
 
 ## 新增图像模型（套用模板）
 
