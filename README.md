@@ -61,20 +61,30 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 ### XHCY Nano Banana 参数
 
+控件顺序与常用参考节点一致：
+
 | 输入 | 说明 |
 | --- | --- |
+| `image1` ~ `image16` | **可选**。一个都不接 = 文生图；接 1 张以上 = 多图参考 |
 | `prompt` | 提示词，必填 |
 | `model` | `nano-banana-2`（推荐，实测最稳）/ `gemini-nano-banana-2.1` / `nano-banana-pro` / `nano-banana-fast` |
 | `api_key` | XHCY AI 访问密钥，每个节点单独填 |
-| `image1` ~ `image16` | **可选**。一个都不接 = 文生图；接 1 张以上 = 多图参考 |
-| `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔 |
-| `base_url` | 站点地址，一般不用改 |
+| `aspect_ratio` | 画面比例，默认 `1:1`。**本站实测只支持 1:1**，选其它比例会被站点拒绝 |
+| `image_size` | `1K` / `2K` / `4K`，默认 `1K`。**本站实测只支持 1K（1024×1024）** |
+| `reply_type` | `async` / `sync`。本站禁用了异步图像生成，**选什么都不影响，都会按同步执行** |
+| `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔，默认 300 / 5 |
+| `base_url` | 站点地址，默认 `https://ai.xhcyai.org` |
 
-输出与 GPT Image 2.5 相同（`image` / `status` / `saved_paths`）。
+| 输出 | 说明 |
+| --- | --- |
+| `image` | 生成结果，可直接接 `SaveImage` / `PreviewImage` |
+| `response_text` | 结果摘要（模式、模型、尺寸、文件路径） |
+| `local_image_paths` | 落盘文件的完整路径 |
 
-> 该家族**只接受 `1024x1024`**（实测传 `2048x2048` 会返回 `size_not_supported`，
-> `gemini-nano-banana-2.1` 同样如此），也没有画质档，
-> 所以节点上不会出现画幅 / 分辨率 / 画质这些用不上的下拉。
+> **尺寸限制（实测）**：该家族只接受 `1024x1024`，传 `2048x2048` 或 `1536x1024`
+> 都会返回 `size_not_supported`。所以 `aspect_ratio` / `image_size` 虽然按参考节点
+> 给了全量选项，但真正可用的是 **1:1 + 1K**；选到别的组合时节点会直接说明原因，
+> 不会让你对着服务端的报错猜。`auto` 会自动按 1024×1024 处理。
 >
 > **速度差异**：实测带一张参考图时，`nano-banana-2` 约 51 秒，
 > 而 `gemini-nano-banana-2.1` 要约 **106 秒**——已经贴近网关的 100 秒等待上限，
