@@ -64,7 +64,7 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | 输入 | 说明 |
 | --- | --- |
 | `prompt` | 提示词，必填 |
-| `model` | `nano-banana-2`（推荐，实测最稳）/ `nano-banana-pro` / `nano-banana-fast` |
+| `model` | `nano-banana-2`（推荐，实测最稳）/ `gemini-nano-banana-2.1` / `nano-banana-pro` / `nano-banana-fast` |
 | `api_key` | XHCY AI 访问密钥，每个节点单独填 |
 | `image1` ~ `image16` | **可选**。一个都不接 = 文生图；接 1 张以上 = 多图参考 |
 | `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔 |
@@ -72,8 +72,13 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 输出与 GPT Image 2.5 相同（`image` / `status` / `saved_paths`）。
 
-> 该家族**只接受 `1024x1024`**（实测传 `2048x2048` 会返回 `size_not_supported`），
-> 也没有画质档，所以节点上不会出现画幅 / 分辨率 / 画质这些用不上的下拉。
+> 该家族**只接受 `1024x1024`**（实测传 `2048x2048` 会返回 `size_not_supported`，
+> `gemini-nano-banana-2.1` 同样如此），也没有画质档，
+> 所以节点上不会出现画幅 / 分辨率 / 画质这些用不上的下拉。
+>
+> **速度差异**：实测带一张参考图时，`nano-banana-2` 约 51 秒，
+> 而 `gemini-nano-banana-2.1` 要约 **106 秒**——已经贴近网关的 100 秒等待上限，
+> 参考图较多时建议优先用 `nano-banana-2`。
 
 ### XHCY MiniMax H3 参数
 

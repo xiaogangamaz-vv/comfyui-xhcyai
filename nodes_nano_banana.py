@@ -24,10 +24,22 @@ except ImportError:  # allow running this file standalone for debugging
 class XHCYNanoBanana(XHCYImageBase):
     """Nano Banana family — text-to-image and multi-reference in one node."""
 
-    VARIANT_MODELS = ["nano-banana-2", "nano-banana-pro", "nano-banana-fast"]
+    VARIANT_MODELS = [
+        "nano-banana-2",
+        "gemini-nano-banana-2.1",
+        "nano-banana-pro",
+        "nano-banana-fast",
+    ]
+
+    MODEL_TOOLTIP = (
+        "同一家族的变体。"
+        "实测 gemini-nano-banana-2.1 带参考图约 106 秒，比同族慢不少、容易贴近网关超时上限，"
+        "参考图多时优先用 nano-banana-2。"
+    )
 
     # 实测：本家族只接受 1024x1024，传 2048x2048 会返回 size_not_supported，
     # 因此不显示画幅 / 分辨率下拉，固定用这个尺寸。
+    # gemini-nano-banana-2.1 同样是只吃 1024x1024。
     FIXED_SIZE = "1024x1024"
 
     # 本家族没有画质档，空列表 = 节点上不显示 quality

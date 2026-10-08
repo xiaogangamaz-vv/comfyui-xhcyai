@@ -174,6 +174,7 @@ class XHCYImageBase:
     #   FIXED_SIZE 非空 -> 不显示 aspect_ratio / resolution，固定使用该像素尺寸
     #   QUALITIES 为空列表 -> 不显示 quality
     FIXED_SIZE = ""
+    MODEL_TOOLTIP = "同一家族的变体，切换即可换模型。"
     NODE_ID = "xhcy_image_base"
     OUTPUT_PREFIX = "xhcy_image"
 
@@ -217,7 +218,7 @@ class XHCYImageBase:
                     list(cls.VARIANT_MODELS),
                     {
                         "default": cls.DEFAULT_MODEL or (cls.VARIANT_MODELS[0] if cls.VARIANT_MODELS else ""),
-                        "tooltip": "同一家族的变体，切换即可换模型。",
+                        "tooltip": cls.MODEL_TOOLTIP,
                     },
                 ),
                 "api_key": (
