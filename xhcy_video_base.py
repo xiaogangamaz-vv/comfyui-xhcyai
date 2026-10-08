@@ -359,7 +359,16 @@ class XHCYVideoBase:
             raise XHCYError(f"{model} 不支持 {ratio} 比例；可选：{'、'.join(allowed_ratio)}")
 
         low, high = self.DURATION_LIMITS.get(model, (1, 15))
-        seconds = _int_param(duration, "时长（秒）", low, high)
+        # 控件允许填 1~15 秒，但各模型下限不同（H3 最少 4 秒、Max 最少 5 秒、
+        # Lite 最少 1 秒）。填到范围外时自动收进合法区间并提示，而不是直接报错，
+        # 省掉用户一次白跑。
+        requested = _int_param(duration, "时长（秒）", 1, 60)
+        seconds = min(max(requested, low), high)
+        duration_note = ""
+        if seconds != requested:
+            duration_note = (
+                f"\n时长已自动调整：{requested} 秒 → {seconds} 秒（{model} 支持 {low}～{high} 秒）"
+            )
         attempts = _int_param(max_poll_attempts, "最大查询次数", 1, 600)
         interval = _int_param(poll_interval, "查询间隔", 1, 60)
 
@@ -398,7 +407,7 @@ class XHCYVideoBase:
             f"XHCY 视频生成成功\n"
             f"节点：{self.NODE_ID}\n"
             f"模型：{model}\n"
-            f"规格：{resolution} · {seconds} 秒 · {ratio}\n"
+            f"规格：{resolution} · {seconds} 秒 · {ratio}{duration_note}\n"
             f"任务：{task_id}\n"
             f"文件：{path}"
         )
