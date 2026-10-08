@@ -10,6 +10,7 @@ which ComfyUI surfaces directly on the node.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import requests
@@ -63,8 +64,18 @@ def _http_error(response: requests.Response, context: str) -> XHCYError:
         return XHCYError(f"接口或资源不存在（HTTP 404）{suffix}")
     if code == 429:
         return XHCYError("请求过于频繁（HTTP 429），请稍后重试")
+    if code == 451:
+        return XHCYError(
+            f"{context}被上游以内容合规原因拒绝（HTTP 451）{suffix}；"
+            "通常是提示词或参考素材被判为不合规，换一种描述或换一张参考图再试"
+        )
     if code == 524:
         return XHCYError("服务端处理超时（HTTP 524，网关等待上限约 100 秒）。带参考图的生成明显更慢，实测单图约 80 秒，请减少参考图数量或缩小分辨率后重试")
+    if code in (502, 503, 504):
+        return XHCYError(
+            f"上游服务暂时不可用（HTTP {code}），已自动重试多次仍未成功；"
+            "这通常是站点上游的临时抖动，等一两分钟再试即可"
+        )
     if code >= 500:
         return XHCYError(f"服务端暂时不可用（HTTP {code}），请稍后重试")
     return XHCYError(f"{context}失败（HTTP {code}）{suffix}")
@@ -123,17 +134,36 @@ class XHCYClient:
                 continue
         raise XHCYError(f"{context}网络失败，请检查网络后重试") from last_error
 
+    # 上游偶发的 502 / 503 / 504（站点原话「服务端暂时不可用」）。
+    # 这类状态码表示请求根本没被处理，重试不会造成重复扣费，所以自动重试几次。
+    _RETRYABLE_STATUS = frozenset({502, 503, 504})
+    _RETRY_DELAYS = (2.0, 5.0)
+
+    def _request_json(self, method: str, path: str, context: str, retry: bool = False, **kwargs) -> dict[str, Any]:
+        attempts = len(self._RETRY_DELAYS) + 1 if retry else 1
+        response = None
+        for index in range(attempts):
+            if index:
+                time.sleep(self._RETRY_DELAYS[index - 1])
+            response = self._send(method, path, context, **kwargs)
+            if response.status_code not in self._RETRYABLE_STATUS:
+                break
+            if index + 1 < attempts:
+                print(
+                    "[XHCY] %s返回 HTTP %d，%.0f 秒后自动重试"
+                    % (context, response.status_code, self._RETRY_DELAYS[index])
+                )
+        return self._parse(response, context)
+
     def post_json(self, path: str, payload: dict[str, Any], context: str = "请求") -> dict[str, Any]:
-        response = self._send(
-            "POST", path, context,
+        return self._request_json(
+            "POST", path, context, retry=True,
             note="；任务是否已提交无法确认，请先别急着重复提交",
             headers=self._headers, json=payload,
         )
-        return self._parse(response, context)
 
     def get_json(self, path: str, context: str = "查询") -> dict[str, Any]:
-        response = self._send("GET", path, context, headers=self._headers)
-        return self._parse(response, context)
+        return self._request_json("GET", path, context, headers=self._headers)
 
     def download(self, url: str, max_bytes: int = 256 * 1024 * 1024) -> bytes:
         """Fetch a generated artifact. Video content lives behind our own /v1 path and needs the bearer token; image URLs are public."""
