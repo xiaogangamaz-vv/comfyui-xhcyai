@@ -175,6 +175,14 @@ class XHCYImageBase:
     #   QUALITIES 为空列表 -> 不显示 quality
     FIXED_SIZE = ""
     MODEL_TOOLTIP = "同一家族的变体，切换即可换模型。"
+    # 尺寸档位控件的字段名（有的站叫 resolution，有的叫 image_size）
+    SIZE_FIELD = "resolution"
+    RATIO_TOOLTIP = "auto 表示交给服务端决定画幅。"
+    RESOLUTION_TOOLTIP = "分辨率档位，节点会换算成接口要求的像素尺寸。"
+    # 非空则在节点上追加 reply_type 下拉
+    REPLY_TYPES: list[str] = []
+    DEFAULT_REPLY_TYPE = "async"
+    REPLY_TOOLTIP = "提交方式；本站不支持异步图像生成，实际都会按同步执行。"
     NODE_ID = "xhcy_image_base"
     OUTPUT_PREFIX = "xhcy_image"
 
@@ -233,7 +241,7 @@ class XHCYImageBase:
                 **cls.shape_inputs(),
                 "max_poll_attempts": (
                     "INT",
-                    {"default": 60, "min": 1, "max": 600, "tooltip": "最多查询多少次结果。"},
+                    {"default": 300, "min": 1, "max": 2000, "tooltip": "最多查询多少次结果。"},
                 ),
                 "poll_interval": (
                     "INT",
@@ -266,14 +274,16 @@ class XHCYImageBase:
         if not cls.FIXED_SIZE:
             inputs["aspect_ratio"] = (
                 list(cls.RATIOS),
-                {"default": cls.DEFAULT_RATIO, "tooltip": "auto 表示交给服务端决定画幅。"},
+                {"default": cls.DEFAULT_RATIO, "tooltip": cls.RATIO_TOOLTIP},
             )
-            inputs["resolution"] = (
+            inputs[cls.SIZE_FIELD] = (
                 list(cls.RESOLUTIONS),
-                {
-                    "default": cls.DEFAULT_RESOLUTION,
-                    "tooltip": "分辨率档位，节点会换算成接口要求的像素尺寸。",
-                },
+                {"default": cls.DEFAULT_RESOLUTION, "tooltip": cls.RESOLUTION_TOOLTIP},
+            )
+        if cls.REPLY_TYPES:
+            inputs["reply_type"] = (
+                list(cls.REPLY_TYPES),
+                {"default": cls.DEFAULT_REPLY_TYPE, "tooltip": cls.REPLY_TOOLTIP},
             )
         if cls.QUALITIES:
             inputs["quality"] = (
@@ -332,6 +342,10 @@ class XHCYImageBase:
             raise XHCYError("提示词（prompt）不能为空")
         if self.VARIANT_MODELS and model not in self.VARIANT_MODELS:
             raise XHCYError(f"未知的模型：{model}")
+
+        # 尺寸档位字段名可能被改过（resolution / image_size），ComfyUI 是按名字传参的
+        if self.SIZE_FIELD != "resolution":
+            resolution = kwargs.get(self.SIZE_FIELD) or resolution
 
         if self.FIXED_SIZE:
             # 该模型只有一个固定尺寸（例如 nano-banana 只吃 1024x1024）
