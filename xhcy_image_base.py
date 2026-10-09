@@ -336,16 +336,17 @@ class XHCYImageBase:
 
     def generate(self, prompt, model, api_key, max_poll_attempts, poll_interval,
                  base_url=DEFAULT_BASE_URL,
-                 aspect_ratio="1:1", resolution="1k", quality="auto", **kwargs):
+                 aspect_ratio=None, resolution=None, quality="auto", **kwargs):
         prompt = (prompt or "").strip()
         if not prompt:
             raise XHCYError("提示词（prompt）不能为空")
         if self.VARIANT_MODELS and model not in self.VARIANT_MODELS:
             raise XHCYError(f"未知的模型：{model}")
 
-        # 尺寸档位字段名可能被改过（resolution / image_size），ComfyUI 是按名字传参的
-        if self.SIZE_FIELD != "resolution":
-            resolution = kwargs.get(self.SIZE_FIELD) or resolution
+        # 尺寸档位字段名可能被改过（resolution / image_size），ComfyUI 是按名字传参的。
+        # 缺省时回落到子类声明的默认值，避免沿用小写的 "1k"（nano-banana 用的是大写 "1K"）。
+        resolution = kwargs.get(self.SIZE_FIELD) or resolution or self.DEFAULT_RESOLUTION
+        aspect_ratio = aspect_ratio or self.DEFAULT_RATIO
 
         if self.FIXED_SIZE:
             # 该模型只有一个固定尺寸（例如 nano-banana 只吃 1024x1024）
