@@ -21,13 +21,12 @@ except ImportError:  # allow running this file standalone for debugging
     from xhcy_image_base import XHCYImageBase  # type: ignore
 
 
-# 与参考节点一致的画幅选项
-_ASPECT_RATIOS = [
-    "auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3",
-    "5:4", "4:5", "21:9", "1:4", "4:1", "1:8", "8:1",
-]
+# 本站实测：nano-banana 系列只接受 1024x1024。1024x1536 / 1536x1024 / 1280x720 /
+# 4096x4096 / 2048x2048 全部返回 size_not_supported，所以下拉里只留能用的，
+# 免得出现「选项存在但一选就报错」的误导。需要其它尺寸请改用 GPT Image 2.5 节点。
+_ASPECT_RATIOS = ["auto", "1:1"]
 
-_IMAGE_SIZES = ["1K", "2K", "4K"]
+_IMAGE_SIZES = ["1K"]
 
 # 本站唯一在用的组合
 _SIZE_MAP = {("1:1", "1K"): "1024x1024"}
@@ -54,8 +53,15 @@ class XHCYNanoBanana(XHCYImageBase):
     SIZE_MAP = _SIZE_MAP
     DEFAULT_RATIO = "1:1"
     DEFAULT_RESOLUTION = "1K"
-    RATIO_TOOLTIP = "画面比例。本站实测只支持 1:1，选其它比例会被站点拒绝。"
-    RESOLUTION_TOOLTIP = "分辨率档位。本站实测只支持 1K（即 1024×1024）。"
+    RATIO_TOOLTIP = (
+        "画面比例。本站的 Nano Banana 只开放了 1:1；"
+        "实测 16:9 / 9:16 / 4:3 等都会被站点拒绝（size_not_supported）。"
+        "需要其它比例请改用 XHCY GPT Image 2.5 节点。"
+    )
+    RESOLUTION_TOOLTIP = (
+        "分辨率档位。本站的 Nano Banana 只开放了 1K（1024×1024）；"
+        "实测 2K / 4K 会被站点拒绝。需要更高分辨率请改用 XHCY GPT Image 2.5 节点。"
+    )
 
     REPLY_TYPES = ["async", "sync"]
     DEFAULT_REPLY_TYPE = "async"
