@@ -95,13 +95,25 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 ### XHCY MiniMax H3 参数
 
+规格来自站点 `GET /api/video/models`（2026-10-12 更新），三个 H3 节点共用同一份规格表
+`xhcy_h3_specs.py`，下拉选项会自动跟随它，不需要手工维护。
+
+| 模型 | 分辨率 | 时长 | 比例 |
+| --- | --- | --- | --- |
+| `MiniMax-H3` | **480P / 768P / 1080P** | **4–30 秒** | adaptive、21:9、16:9、4:3、1:1、3:4、9:16 |
+| `MiniMax-H3-Max` | 768P / 480P | 5–15 秒 | 同 H3 |
+| `MiniMax-H3-Lite` | 480P / 768P | 1–15 秒 | adaptive、16:9、9:16、1:1 |
+
+> `MiniMax-H3` 的时长**超过 15 秒时，生成与素材费用翻倍**（站点计费规则）。
+> 站点 2026-10-12 把原来的「2K」档改成了 **1080P**。
+
 | 输入 | 说明 |
 | --- | --- |
 | `prompt` | 视频描述，必填 |
-| `model` | 家族变体：`MiniMax-H3`（支持 2K）/ `MiniMax-H3-Max`（更快）/ `MiniMax-H3-Lite`（最短 1 秒） |
+| `model` | 上面的三个变体，切换即可 |
 | `api_key` | XHCY AI 访问密钥，每个节点单独填 |
-| `resolution` | `768P` / `2K` / `480P`，按所选模型自动校验 |
-| `duration` | 时长（秒），按秒计费 |
+| `resolution` | 480P / 768P / 1080P，**按所选模型自动校验**（选到不支持的值会明确提示） |
+| `duration` | 时长（秒），按秒计费；**超出所选模型范围时会自动收进合法区间并在状态里说明** |
 | `ratio` | 画面比例，`adaptive` 表示由服务端决定 |
 | `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔 |
 | `base_url` | 站点地址，一般不用改 |
@@ -155,9 +167,12 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
   `reference_image` / `reference_video` / `reference_audio`，都以 data URI 放进 `content` 数组。
 - **不信任本地代理**：实测本机 `HTTP_PROXY` 在请求体稍大（带参考素材）时会直接掐断连接并报
   `ProxyError`，而同一请求直连正常。因此客户端**默认直连**，只有直连失败才回退到环境代理。
-- 站点目前**没有**「视频再生成（768P→2K）」和「Context-IR 提示词增强」的接口：
-  相关路径全部返回 404，也没有对应的模型名（`MiniMax-H3-Context-IR` 会报
-  `no available channel`）。计费表里虽有这两项 SKU，但功能尚未开放。
+- **站点于 2026-10-12 开放了「视频再生成」与「Context-IR」**：
+  `GET /api/video/models` 里 `MiniMax-H3` 的 `modes` 现在包含
+  `regeneration_768p_to_2k` 与 `context_ir`（此前这两项只有计费 SKU、没有接口）。
+  **节点尚未实现这两个功能**——具体调用方式还需要实测确认。
+- 同一次更新里，`MiniMax-H3` 的分辨率由「768P / 2K」调整为 **480P / 768P / 1080P**，
+  时长上限由 15 秒放宽到 **30 秒**（超 15 秒费用翻倍），并新增 `MiniMax-H3-Lite`。
 
 ## 新增图像模型（套用模板）
 

@@ -1,49 +1,47 @@
 """XHCY AI video node — MiniMax H3 family, first/last frame driven.
 
-Connect first_frame, last_frame, or both: the video starts and/or ends on those
-images. Verified against the live service — content entries use role
-"first_frame" / "last_frame" carrying a base64 data URI.
+接 first_frame、last_frame 或两张都接：视频从该画面开始、到该画面结束。
+规格（分辨率 / 时长 / 比例）统一取自 xhcy_h3_specs.py。
 """
 
 from __future__ import annotations
 
 try:
     from .xhcy_client import XHCYError
+    from .xhcy_h3_specs import DEFAULT_DURATION as _DEFAULT_DURATION
+    from .xhcy_h3_specs import DEFAULT_MODEL as _DEFAULT_MODEL
+    from .xhcy_h3_specs import DEFAULT_RATIO as _DEFAULT_RATIO
+    from .xhcy_h3_specs import DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION
+    from .xhcy_h3_specs import DURATION_LIMITS as _DURATION_LIMITS
+    from .xhcy_h3_specs import MODELS as _MODELS
+    from .xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS
+    from .xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS
     from .xhcy_video_base import XHCYVideoBase, image_tensor_to_uri
-except ImportError:  # allow running this file standalone for debugging
+except ImportError:  # 允许单文件直接运行调试
     from xhcy_client import XHCYError  # type: ignore
+    from xhcy_h3_specs import DEFAULT_DURATION as _DEFAULT_DURATION  # type: ignore
+    from xhcy_h3_specs import DEFAULT_MODEL as _DEFAULT_MODEL  # type: ignore
+    from xhcy_h3_specs import DEFAULT_RATIO as _DEFAULT_RATIO  # type: ignore
+    from xhcy_h3_specs import DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION  # type: ignore
+    from xhcy_h3_specs import DURATION_LIMITS as _DURATION_LIMITS  # type: ignore
+    from xhcy_h3_specs import MODELS as _MODELS  # type: ignore
+    from xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS  # type: ignore
+    from xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS  # type: ignore
     from xhcy_video_base import XHCYVideoBase, image_tensor_to_uri  # type: ignore
-
-
-_H3_RATIOS = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
-_LITE_RATIOS = ["adaptive", "16:9", "9:16", "1:1"]
 
 
 class XHCYMiniMaxH3Frames(XHCYVideoBase):
     """MiniMax H3 family — first/last frame to video."""
 
-    VARIANT_MODELS = ["MiniMax-H3", "MiniMax-H3-Max", "MiniMax-H3-Lite"]
+    VARIANT_MODELS = list(_MODELS)
+    RESOLUTION_LIMITS = _RESOLUTION_LIMITS
+    RATIO_LIMITS = _RATIO_LIMITS
+    DURATION_LIMITS = _DURATION_LIMITS
 
-    RESOLUTION_LIMITS = {
-        "MiniMax-H3": ["768P", "2K"],
-        "MiniMax-H3-Max": ["768P", "480P"],
-        "MiniMax-H3-Lite": ["768P", "480P"],
-    }
-    RATIO_LIMITS = {
-        "MiniMax-H3": _H3_RATIOS,
-        "MiniMax-H3-Max": _H3_RATIOS,
-        "MiniMax-H3-Lite": _LITE_RATIOS,
-    }
-    DURATION_LIMITS = {
-        "MiniMax-H3": (4, 15),
-        "MiniMax-H3-Max": (5, 15),
-        "MiniMax-H3-Lite": (1, 15),
-    }
-
-    DEFAULT_MODEL = "MiniMax-H3"
-    DEFAULT_RESOLUTION = "768P"
-    DEFAULT_DURATION = 5
-    DEFAULT_RATIO = "16:9"
+    DEFAULT_MODEL = _DEFAULT_MODEL
+    DEFAULT_RESOLUTION = _DEFAULT_RESOLUTION
+    DEFAULT_DURATION = _DEFAULT_DURATION
+    DEFAULT_RATIO = _DEFAULT_RATIO
     PROMPT_TOOLTIP = "描述画面怎么动起来。留空会直接报错，不会白白扣费。"
     NODE_ID = "xhcy_minimax_h3_frames"
     OUTPUT_PREFIX = "xhcy_h3_frames"

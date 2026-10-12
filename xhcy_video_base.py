@@ -254,8 +254,8 @@ class XHCYVideoBase:
     DEFAULT_RESOLUTION = "768P"
     DEFAULT_DURATION = 5
     DEFAULT_RATIO = "16:9"
-    RESOLUTIONS: list[str] = ["768P", "2K", "480P"]
-    RATIOS: list[str] = ["16:9", "9:16", "1:1", "adaptive", "21:9", "4:3", "3:4"]
+    RESOLUTIONS: list[str] = ["480P", "768P", "1080P"]
+    RATIOS: list[str] = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
     PROMPT_TOOLTIP = "视频描述（提示词）。留空会直接报错，不会白白扣费。"
     NODE_ID = "xhcy_video_base"
     OUTPUT_PREFIX = "xhcy_video"
@@ -268,6 +268,26 @@ class XHCYVideoBase:
     OUTPUT_NODE = False
 
     # ------------------------------------------------------------------ #
+
+    @classmethod
+    def all_resolutions(cls) -> list[str]:
+        """下拉候选 = 各模型支持项取并集（改 RESOLUTION_LIMITS 即自动同步）。"""
+        seen: list[str] = []
+        for values in cls.RESOLUTION_LIMITS.values():
+            for value in values:
+                if value not in seen:
+                    seen.append(value)
+        return seen or list(cls.RESOLUTIONS)
+
+    @classmethod
+    def all_ratios(cls) -> list[str]:
+        """下拉候选 = 各模型支持比例取并集。"""
+        seen: list[str] = []
+        for values in cls.RATIO_LIMITS.values():
+            for value in values:
+                if value not in seen:
+                    seen.append(value)
+        return seen or list(cls.RATIOS)
 
     @classmethod
     def material_inputs(cls) -> dict:
@@ -299,7 +319,7 @@ class XHCYVideoBase:
                     },
                 ),
                 "resolution": (
-                    list(cls.RESOLUTIONS),
+                    cls.all_resolutions(),
                     {"default": cls.DEFAULT_RESOLUTION, "tooltip": "输出分辨率，按所选模型自动校验。"},
                 ),
                 "duration": (
@@ -307,12 +327,12 @@ class XHCYVideoBase:
                     {
                         "default": cls.DEFAULT_DURATION,
                         "min": 1,
-                        "max": 15,
-                        "tooltip": "时长（秒），按秒计费。",
+                        "max": 60,
+                        "tooltip": "时长（秒），按秒计费。超出所选模型范围时会自动收进合法区间并提示。",
                     },
                 ),
                 "ratio": (
-                    list(cls.RATIOS),
+                    cls.all_ratios(),
                     {"default": cls.DEFAULT_RATIO, "tooltip": "画面比例，adaptive 由服务端决定。"},
                 ),
                 "max_poll_attempts": (
