@@ -1,51 +1,68 @@
 """XHCY AI video node — MiniMax H3 family, text-to-video.
 
-Plain text-to-video. Related nodes:
-    * nodes_minimax_h3_frames.py  - first/last frame driven
-    * nodes_minimax_h3_ref.py     - image / video / audio reference driven
+规格（分辨率 / 时长 / 比例）统一放在 xhcy_h3_specs.py，三个 H3 节点共用。
+
+相关节点：
+    * nodes_minimax_h3_frames.py  - 首尾帧 / 图生视频
+    * nodes_minimax_h3_ref.py     - 图片 / 视频 / 音频参考
 """
 
 from __future__ import annotations
 
 try:
+    from .xhcy_h3_specs import (
+        DEFAULT_DURATION as _DEFAULT_DURATION,
+    )
+    from .xhcy_h3_specs import (
+        DEFAULT_MODEL as _DEFAULT_MODEL,
+    )
+    from .xhcy_h3_specs import (
+        DEFAULT_RATIO as _DEFAULT_RATIO,
+    )
+    from .xhcy_h3_specs import (
+        DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION,
+    )
+    from .xhcy_h3_specs import (
+        DURATION_LIMITS as _DURATION_LIMITS,
+    )
+    from .xhcy_h3_specs import (
+        MODELS as _MODELS,
+    )
+    from .xhcy_h3_specs import (
+        RATIO_LIMITS as _RATIO_LIMITS,
+    )
+    from .xhcy_h3_specs import (
+        RESOLUTION_LIMITS as _RESOLUTION_LIMITS,
+    )
     from .xhcy_video_base import XHCYVideoBase
-except ImportError:  # allow running this file standalone for debugging
+except ImportError:  # 允许单文件直接运行调试
+    from xhcy_h3_specs import DEFAULT_DURATION as _DEFAULT_DURATION  # type: ignore
+    from xhcy_h3_specs import DEFAULT_MODEL as _DEFAULT_MODEL  # type: ignore
+    from xhcy_h3_specs import DEFAULT_RATIO as _DEFAULT_RATIO  # type: ignore
+    from xhcy_h3_specs import DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION  # type: ignore
+    from xhcy_h3_specs import DURATION_LIMITS as _DURATION_LIMITS  # type: ignore
+    from xhcy_h3_specs import MODELS as _MODELS  # type: ignore
+    from xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS  # type: ignore
+    from xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS  # type: ignore
     from xhcy_video_base import XHCYVideoBase  # type: ignore
-
-
-_H3_RATIOS = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
-_LITE_RATIOS = ["adaptive", "16:9", "9:16", "1:1"]
 
 
 class XHCYMiniMaxH3(XHCYVideoBase):
     """MiniMax H3 family — text-to-video."""
 
-    VARIANT_MODELS = ["MiniMax-H3", "MiniMax-H3-Max", "MiniMax-H3-Lite"]
+    VARIANT_MODELS = list(_MODELS)
+    RESOLUTION_LIMITS = _RESOLUTION_LIMITS
+    RATIO_LIMITS = _RATIO_LIMITS
+    DURATION_LIMITS = _DURATION_LIMITS
 
-    RESOLUTION_LIMITS = {
-        "MiniMax-H3": ["768P", "2K"],
-        "MiniMax-H3-Max": ["768P", "480P"],
-        "MiniMax-H3-Lite": ["768P", "480P"],
-    }
-    RATIO_LIMITS = {
-        "MiniMax-H3": _H3_RATIOS,
-        "MiniMax-H3-Max": _H3_RATIOS,
-        "MiniMax-H3-Lite": _LITE_RATIOS,
-    }
-    DURATION_LIMITS = {
-        "MiniMax-H3": (4, 15),
-        "MiniMax-H3-Max": (5, 15),
-        "MiniMax-H3-Lite": (1, 15),
-    }
-
-    DEFAULT_MODEL = "MiniMax-H3"
-    DEFAULT_RESOLUTION = "768P"
-    DEFAULT_DURATION = 5
-    DEFAULT_RATIO = "16:9"
+    DEFAULT_MODEL = _DEFAULT_MODEL
+    DEFAULT_RESOLUTION = _DEFAULT_RESOLUTION
+    DEFAULT_DURATION = _DEFAULT_DURATION
+    DEFAULT_RATIO = _DEFAULT_RATIO
     NODE_ID = "xhcy_minimax_h3"
     OUTPUT_PREFIX = "xhcy_minimax_h3"
     CATEGORY = "XHCY/Video"
-    DESCRIPTION = "XHCY AI · MiniMax H3 家族文生视频（MiniMax-H3 / -Max / -Lite）"
+    DESCRIPTION = "XHCY AI · MiniMax H3 家族文生视频（480P / 768P / 1080P）"
 
 
 NODE_CLASS_MAPPINGS = {

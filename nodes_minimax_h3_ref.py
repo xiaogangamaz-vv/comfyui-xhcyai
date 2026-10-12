@@ -1,35 +1,46 @@
 """XHCY AI video node — MiniMax H3 family, multimodal reference.
 
-Reference material is optional; connect whichever is available:
+素材都可选，接哪个用哪个：
     image1..image9  -> role "reference_image"
     video1..video3  -> role "reference_video"
     audio1..audio3  -> role "reference_audio"
-With nothing connected it degrades to plain text-to-video.
+什么都不接就退化为纯文生视频。
 
-Verified against the live service for images (data URI + role), matching the
-documented content.role values.
+规格（分辨率 / 时长 / 比例）统一取自 xhcy_h3_specs.py。
 """
 
 from __future__ import annotations
 
 try:
+    from .xhcy_h3_specs import DEFAULT_DURATION as _DEFAULT_DURATION
+    from .xhcy_h3_specs import DEFAULT_MODEL as _DEFAULT_MODEL
+    from .xhcy_h3_specs import DEFAULT_RATIO as _DEFAULT_RATIO
+    from .xhcy_h3_specs import DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION
+    from .xhcy_h3_specs import DURATION_LIMITS as _DURATION_LIMITS
+    from .xhcy_h3_specs import MODELS as _MODELS
+    from .xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS
+    from .xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS
     from .xhcy_video_base import (
         XHCYVideoBase,
         audio_input_to_uri,
         image_tensor_to_uri,
         video_input_to_uri,
     )
-except ImportError:  # allow running this file standalone for debugging
+except ImportError:  # 允许单文件直接运行调试
+    from xhcy_h3_specs import DEFAULT_DURATION as _DEFAULT_DURATION  # type: ignore
+    from xhcy_h3_specs import DEFAULT_MODEL as _DEFAULT_MODEL  # type: ignore
+    from xhcy_h3_specs import DEFAULT_RATIO as _DEFAULT_RATIO  # type: ignore
+    from xhcy_h3_specs import DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION  # type: ignore
+    from xhcy_h3_specs import DURATION_LIMITS as _DURATION_LIMITS  # type: ignore
+    from xhcy_h3_specs import MODELS as _MODELS  # type: ignore
+    from xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS  # type: ignore
+    from xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS  # type: ignore
     from xhcy_video_base import (  # type: ignore
         XHCYVideoBase,
         audio_input_to_uri,
         image_tensor_to_uri,
         video_input_to_uri,
     )
-
-
-_H3_RATIOS = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
-_LITE_RATIOS = ["adaptive", "16:9", "9:16", "1:1"]
 
 MAX_REF_IMAGES = 9
 MAX_REF_VIDEOS = 3
@@ -39,28 +50,15 @@ MAX_REF_AUDIOS = 3
 class XHCYMiniMaxH3Reference(XHCYVideoBase):
     """MiniMax H3 family — image / video / audio reference to video."""
 
-    VARIANT_MODELS = ["MiniMax-H3", "MiniMax-H3-Max", "MiniMax-H3-Lite"]
+    VARIANT_MODELS = list(_MODELS)
+    RESOLUTION_LIMITS = _RESOLUTION_LIMITS
+    RATIO_LIMITS = _RATIO_LIMITS
+    DURATION_LIMITS = _DURATION_LIMITS
 
-    RESOLUTION_LIMITS = {
-        "MiniMax-H3": ["768P", "2K"],
-        "MiniMax-H3-Max": ["768P", "480P"],
-        "MiniMax-H3-Lite": ["768P", "480P"],
-    }
-    RATIO_LIMITS = {
-        "MiniMax-H3": _H3_RATIOS,
-        "MiniMax-H3-Max": _H3_RATIOS,
-        "MiniMax-H3-Lite": _LITE_RATIOS,
-    }
-    DURATION_LIMITS = {
-        "MiniMax-H3": (4, 15),
-        "MiniMax-H3-Max": (5, 15),
-        "MiniMax-H3-Lite": (1, 15),
-    }
-
-    DEFAULT_MODEL = "MiniMax-H3"
-    DEFAULT_RESOLUTION = "768P"
-    DEFAULT_DURATION = 5
-    DEFAULT_RATIO = "16:9"
+    DEFAULT_MODEL = _DEFAULT_MODEL
+    DEFAULT_RESOLUTION = _DEFAULT_RESOLUTION
+    DEFAULT_DURATION = _DEFAULT_DURATION
+    DEFAULT_RATIO = _DEFAULT_RATIO
     PROMPT_TOOLTIP = (
         "描述你要生成的视频。多张参考图时，在提示词里按顺序用「Image 1」「Image 2」引用它们，"
         "例如：让 Image 1 里的女孩穿上 Image 2 的裙子。留空会直接报错，不会白白扣费。"
