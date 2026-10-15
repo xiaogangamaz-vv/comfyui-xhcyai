@@ -62,7 +62,7 @@ class XHCYMiniMaxH3(XHCYVideoBase):
     NODE_ID = "xhcy_minimax_h3"
     OUTPUT_PREFIX = "xhcy_minimax_h3"
     CATEGORY = "XHCY/Video"
-    DESCRIPTION = "XHCY AI · MiniMax H3 家族文生视频（480P / 768P / 1080P）"
+    DESCRIPTION = "XHCY AI · MiniMax H3 家族文生视频（480P / 768P / 1080P / 2K）"
 
 
 NODE_CLASS_MAPPINGS = {

@@ -254,7 +254,7 @@ class XHCYVideoBase:
     DEFAULT_RESOLUTION = "768P"
     DEFAULT_DURATION = 5
     DEFAULT_RATIO = "16:9"
-    RESOLUTIONS: list[str] = ["480P", "768P", "1080P"]
+    RESOLUTIONS: list[str] = ["480P", "768P", "1080P", "2K"]
     RATIOS: list[str] = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
     PROMPT_TOOLTIP = "视频描述（提示词）。留空会直接报错，不会白白扣费。"
     NODE_ID = "xhcy_video_base"
