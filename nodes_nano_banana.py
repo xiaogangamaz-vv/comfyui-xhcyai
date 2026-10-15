@@ -80,7 +80,7 @@ class XHCYNanoBanana(XHCYImageBase):
     )
 
     @classmethod
-    def resolve_size(cls, aspect_ratio: str, resolution: str) -> str:
+    def resolve_size(cls, aspect_ratio: str, resolution: str, model: str | None = None) -> str:
         """本站的 nano-banana 只认 1024x1024，其余组合给出明确提示。"""
         if aspect_ratio == "auto":
             return "1024x1024"

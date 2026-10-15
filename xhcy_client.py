@@ -23,6 +23,12 @@ IMAGE_GENERATIONS_PATH = "/v1/images/generations"
 IMAGE_TASK_PATH = "/v1/images/tasks/{task_id}"
 VIDEO_GENERATIONS_PATH = "/v1/video/generations"
 VIDEO_TASK_PATH = "/v1/video/generations/{task_id}"
+# 768P -> 2K 再生成：结果仍走 /v1/video/generations/{task_id} 轮询
+VIDEO_REGENERATIONS_PATH = "/v1/video/regenerations"
+# H3 Context-IR：同步返回增强后的提示词，不产生可查询任务
+VIDEO_CONTEXT_IR_PATH = "/v1/video/context-ir"
+# 文本/对话模型（OpenAI 兼容）
+CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 
 _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 300  # image/video generation can genuinely take minutes
@@ -216,6 +222,18 @@ class XHCYClient:
     def poll_video(self, task_id: str) -> dict[str, Any]:
         return self.get_json(VIDEO_TASK_PATH.format(task_id=task_id), "视频结果查询")
 
+    def submit_video_regeneration(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """768P -> 2K 再生成。请求体与生成接口不同，见 BuildRegenerationPayload。"""
+        return self.post_json(VIDEO_REGENERATIONS_PATH, payload, "视频再生成请求")
+
+    def submit_context_ir(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """H3 Context-IR。站点同步等待上游产出一段增强后的提示词，可能需要 1～2 分钟。"""
+        return self.post_json(VIDEO_CONTEXT_IR_PATH, payload, "Context-IR 请求")
+
+    def chat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """文本/对话模型（OpenAI 兼容的 /v1/chat/completions）。"""
+        return self.post_json(CHAT_COMPLETIONS_PATH, payload, "对话请求")
+
 
 # ---------------------------------------------------------------------- #
 # Response parsers — tolerant of the gateway's several envelope shapes
@@ -295,6 +313,65 @@ def extract_video_url(payload: dict[str, Any]) -> str:
         value = payload.get(key)
         if isinstance(value, str) and value.startswith("http"):
             return value
+    return ""
+
+
+def extract_chat_text(payload: dict[str, Any]) -> str:
+    """从 /v1/chat/completions 的返回里取出正文。
+
+    choices[0].message.content 可能是字符串，也可能是分片数组
+    （多模态或部分网关会把文本拆成 [{"type": "text", "text": "..."}]）。
+    """
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content
+                if isinstance(content, list):
+                    parts: list[str] = []
+                    for piece in content:
+                        if isinstance(piece, dict) and piece.get("text"):
+                            parts.append(str(piece["text"]))
+                        elif isinstance(piece, str):
+                            parts.append(piece)
+                    if parts:
+                        return "".join(parts)
+            text = choice.get("text")
+            if isinstance(text, str) and text.strip():
+                return text
+
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("content", "text", "answer", "output"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    for key in ("content", "text", "answer"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def extract_prompt(payload: dict[str, Any]) -> str:
+    """Context-IR 的产物：{"success": true, "data": {"task_id": ..., "prompt": "..."}}."""
+    data = payload.get("data")
+    if isinstance(data, dict):
+        for key in ("prompt", "enhanced_prompt", "text"):
+            value = data.get(key)
+            if value:
+                return str(value)
+    if isinstance(data, str) and data.strip():
+        return data
+    for key in ("prompt", "enhanced_prompt"):
+        value = payload.get(key)
+        if value:
+            return str(value)
     return ""
 
 

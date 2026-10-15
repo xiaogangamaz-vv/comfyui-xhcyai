@@ -157,6 +157,8 @@ class XHCYImageBase:
 
     # --- to be declared by subclasses ---
     VARIANT_MODELS: list[str] = []
+    # 节点上出现几个参考图入口；子类可按模型上限调小（例如 seedream 只吃 10 张）
+    MAX_REFERENCES = MAX_REFERENCE_IMAGES
     SIZES: list[str] = ["auto", "1024x1024", "1536x1024", "1024x1536"]
     QUALITIES: list[str] = ["auto", "low", "medium", "high"]
     RATIOS: list[str] = [
@@ -210,7 +212,7 @@ class XHCYImageBase:
                     )
                 },
             )
-            for i in range(1, MAX_REFERENCE_IMAGES + 1)
+            for i in range(1, cls.MAX_REFERENCES + 1)
         }
         return {
             "required": {
@@ -293,7 +295,12 @@ class XHCYImageBase:
         return inputs
 
     @classmethod
-    def resolve_size(cls, aspect_ratio: str, resolution: str) -> str:
+    def resolve_size(cls, aspect_ratio: str, resolution: str, model: str | None = None) -> str:
+        """(画幅, 分辨率) -> 接口要求的像素尺寸。
+
+        model 只用于让子类按变体做更细的限制（例如 gpt-image-2 只吃 1024x1024），
+        基类不区分变体、会忽略它。
+        """
         if aspect_ratio == "auto":
             return "auto"
         if not cls.SIZE_MAP:
@@ -308,19 +315,24 @@ class XHCYImageBase:
         return cls.RESOLUTION_LIMITS.get(model, cls.RESOLUTIONS)
 
     @classmethod
+    def check_references(cls, model: str, references: list) -> None:
+        """子类可覆盖：按所选模型校验参考图数量。默认不限制。"""
+        return None
+
+    @classmethod
     def collect_reference_images(cls, kwargs: dict) -> list[str]:
         """Turn every connected IMAGE input into a data URI (batches expanded)."""
         collected: list[str] = []
         total = 0
-        for index in range(1, MAX_REFERENCE_IMAGES + 1):
+        for index in range(1, cls.MAX_REFERENCES + 1):
             batch = kwargs.get(f"image{index}")
             if batch is None:
                 continue
             if not isinstance(batch, torch.Tensor) or batch.ndim != 4:
                 raise XHCYError(f"image{index} 必须是 ComfyUI 的 IMAGE 输入")
             for item in batch:
-                if len(collected) >= MAX_REFERENCE_IMAGES:
-                    raise XHCYError(f"参考图最多 {MAX_REFERENCE_IMAGES} 张")
+                if len(collected) >= cls.MAX_REFERENCES:
+                    raise XHCYError(f"参考图最多 {cls.MAX_REFERENCES} 张")
                 uri = tensor_to_data_uri(item)
                 total += len(uri)
                 if total > MAX_REFERENCE_TOTAL * 1.4:  # base64 体积约为原始 1.34 倍
@@ -357,13 +369,14 @@ class XHCYImageBase:
                 raise XHCYError(
                     f"{model} 不支持 {resolution} 分辨率；可选：{'、'.join(allowed)}"
                 )
-            size = self.resolve_size(aspect_ratio, resolution)
+            size = self.resolve_size(aspect_ratio, resolution, model)
 
         attempts = _int_param(max_poll_attempts, "最大查询次数", 1, 600)
         interval = _int_param(poll_interval, "查询间隔", 1, 60)
 
         check_interrupt()
         references = self.collect_reference_images(kwargs)
+        self.check_references(model, references)
 
         client = XHCYClient(api_key, base_url)
         payload: dict = {
