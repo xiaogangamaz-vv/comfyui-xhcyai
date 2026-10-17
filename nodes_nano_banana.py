@@ -40,6 +40,10 @@ class XHCYNanoBanana(XHCYImageBase):
         "gemini-nano-banana-2.1",
         "nano-banana-pro",
         "nano-banana-fast",
+        # 2026-10-17 复测：站点现在接受这个模型名（空 prompt 返回 prompt_missing，
+        # 说明已过参数校验并按模型路由）；10-07 时同一个名字会被上游直接拒绝。
+        # 能力按同族处理（1:1 + 1K），尚未实测出图。
+        "nano-banana",
     ]
 
     MODEL_TOOLTIP = (
