@@ -76,10 +76,14 @@ except ImportError:  # allow running this file standalone for debugging
 # 会在 100 秒时返回 524，而站点还在后台继续等。素材越大，上游建任务越慢，
 # 越容易撞这道墙 —— 所以把上限和压缩比都收紧，宁可少一点细节，也别让整次
 # 生成白等 100 秒。
-MAX_MATERIAL_IMAGE_EDGE = 1280
-MATERIAL_IMAGE_QUALITY = 86
-MAX_MATERIAL_BYTES = 8 * 1024 * 1024       # per material item, raw bytes
-MAX_MATERIAL_TOTAL = 24 * 1024 * 1024      # whole request, raw bytes
+# 参考素材尽量不降质：只有在超过 2560 长边时才缩放，JPEG 质量 95（肉眼几乎
+# 无损）。实测上传不是瓶颈（6 MB 上传 0.84 秒），所以压素材对「提交超时」帮助
+# 很小 —— 那 100 秒耗在站点转发上游建任务上，不在上传上。
+MAX_MATERIAL_IMAGE_EDGE = 2560
+MATERIAL_IMAGE_QUALITY = 95
+# 上限按「base64 后不超 Cloudflare 单请求 100 MB」反推：raw×1.34 是实际上传量。
+MAX_MATERIAL_BYTES = 48 * 1024 * 1024      # 单个素材，base64 后约 64 MB
+MAX_MATERIAL_TOTAL = 60 * 1024 * 1024      # 整个请求，base64 后约 80 MB
 MAX_VIDEO_BYTES = 512 * 1024 * 1024        # result download cap
 
 
