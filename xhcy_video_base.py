@@ -412,6 +412,11 @@ class XHCYVideoBase:
             "duration": seconds,
             "ratio": ratio,
             "content": content,
+            # 让站点把「提交上游」放到后台，请求立刻返回任务号。
+            # 带参考素材的请求要等站点把几十 MB 转发给上游建任务，实测会超过
+            # Cloudflare 固定的 100 秒上限（返回 524，任务却可能已经建好）。
+            # 站点没有这个字段的旧版本会忽略它，行为不变。
+            "async": True,
         }
 
         check_interrupt()
