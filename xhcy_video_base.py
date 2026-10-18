@@ -71,10 +71,15 @@ except ImportError:  # allow running this file standalone for debugging
 # material means a giant request that can blow through the gateway timeout.
 # ---------------------------------------------------------------------- #
 
-MAX_MATERIAL_IMAGE_EDGE = 1536
-MATERIAL_IMAGE_QUALITY = 88
-MAX_MATERIAL_BYTES = 12 * 1024 * 1024      # per material item, raw bytes
-MAX_MATERIAL_TOTAL = 40 * 1024 * 1024      # whole request, raw bytes
+# 2026-10-18：站点提交视频时是「同步等上游建任务」，而它自己的 HTTP 客户端在
+# RelayTimeout 未配置时根本没有超时（common/client/init.go），于是 Cloudflare
+# 会在 100 秒时返回 524，而站点还在后台继续等。素材越大，上游建任务越慢，
+# 越容易撞这道墙 —— 所以把上限和压缩比都收紧，宁可少一点细节，也别让整次
+# 生成白等 100 秒。
+MAX_MATERIAL_IMAGE_EDGE = 1280
+MATERIAL_IMAGE_QUALITY = 86
+MAX_MATERIAL_BYTES = 8 * 1024 * 1024       # per material item, raw bytes
+MAX_MATERIAL_TOTAL = 24 * 1024 * 1024      # whole request, raw bytes
 MAX_VIDEO_BYTES = 512 * 1024 * 1024        # result download cap
 
 
@@ -406,7 +411,11 @@ class XHCYVideoBase:
         }
 
         check_interrupt()
-        first = client.submit_video(payload)
+        started_at = time.time()
+        try:
+            first = client.submit_video(payload)
+        except XHCYError as exc:
+            first = self._recover_after_gateway_timeout(client, model, started_at, exc)
         status = extract_status(first)
         if status in STATUS_FAILURE:
             raise XHCYError(f"提交失败：{extract_failure_reason(first) or '服务端未给出原因'}")
@@ -443,6 +452,54 @@ class XHCYVideoBase:
             return _VideoFromFile(path)
         except Exception:
             return None
+
+    # 站点提交视频时是同步等上游建任务，而它自己的 HTTP 客户端在 RelayTimeout
+    # 未配置时没有超时（common/client/init.go）；Cloudflare 只等 100 秒就返回
+    # 524，可站点往往还在后台继续建任务。与其让整次生成白跑，不如回任务列表
+    # 把它捞回来 —— 列表按密钥隔离，加上时间窗口和模型名双重匹配。
+    _TIMEOUT_HINTS = ("http 524", "超时", "timeout", "timed out")
+
+    @classmethod
+    def _recover_after_gateway_timeout(cls, client: XHCYClient, model: str,
+                                       started_at: float, exc: Exception) -> dict:
+        message = str(exc).lower()
+        if not any(hint in message for hint in cls._TIMEOUT_HINTS):
+            raise exc
+
+        print("[XHCY] 提交遇到网关超时，正在任务列表里查找可能已创建的任务…")
+        for _ in range(4):
+            sleep_interruptible(8)
+            check_interrupt()
+            try:
+                listing = client.list_video_tasks(page=1, size=10)
+            except XHCYError:
+                continue
+            items = listing.get("items")
+            if not isinstance(items, list):
+                data = listing.get("data")
+                items = data if isinstance(data, list) else []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("model") or "") != model:
+                    continue
+                created = item.get("created_at")
+                if not isinstance(created, (int, float)) or created < started_at - 15:
+                    continue
+                task_id = item.get("task_id") or item.get("id")
+                if task_id:
+                    print("[XHCY] 已找回任务 %s（状态 %s）" % (task_id, item.get("status")))
+                    return {"task_id": str(task_id), "status": item.get("status") or "queued"}
+
+        raise XHCYError(
+            "提交时网关超时（HTTP 524，Cloudflare 等待上限约 100 秒），"
+            "任务列表里也没找到这次提交的任务。\n"
+            "这通常是参考素材太大或太多，站点转发给上游建任务超过了 100 秒。\n"
+            "建议：\n"
+            "  1) 减少参考素材，尤其是参考视频，或把参考视频剪短；\n"
+            "  2) 分辨率先降到 768P 再试一次；\n"
+            "  3) 过几分钟到站点的任务列表看看，任务可能已经在后台生成好了。"
+        ) from exc
 
     @staticmethod
     def _wait_for_video(client: XHCYClient, task_id: str, attempts: int, interval: int) -> dict:

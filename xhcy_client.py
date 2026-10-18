@@ -222,6 +222,16 @@ class XHCYClient:
     def poll_video(self, task_id: str) -> dict[str, Any]:
         return self.get_json(VIDEO_TASK_PATH.format(task_id=task_id), "视频结果查询")
 
+    def list_video_tasks(self, page: int = 1, size: int = 10) -> dict[str, Any]:
+        """列出本密钥最近提交的视频任务。
+
+        用来在「提交请求被网关超时掐断」之后找回任务：站点是同步等上游建任务的，
+        而它自己没设超时，所以 Cloudflare 报了 524 之后任务其实还在后台建，
+        很快就会出现在这个列表里。
+        """
+        path = "%s?page_num=%d&page_size=%d" % (VIDEO_GENERATIONS_PATH, int(page), int(size))
+        return self.get_json(path, "视频任务列表")
+
     def submit_video_regeneration(self, payload: dict[str, Any]) -> dict[str, Any]:
         """768P -> 2K 再生成。请求体与生成接口不同，见 BuildRegenerationPayload。"""
         return self.post_json(VIDEO_REGENERATIONS_PATH, payload, "视频再生成请求")
