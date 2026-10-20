@@ -564,6 +564,18 @@ class XHCYVideoBase:
                 raise XHCYError(f"生成失败：{extract_failure_reason(current) or '服务端未给出原因'}")
             if not status and extract_video_url(current):
                 return current
+        if last_status == "submitted":
+            # 站点已经收下请求，但上游还没建出任务。这是上游排队或临时故障
+            # （实测上游 metaso 会直接回 502 Bad Gateway），不是请求本身有问题。
+            # 说清楚比只报「等待超时」有用：用户知道该等、该重试，而不是改素材。
+            raise XHCYError(
+                "等待超时（已查询 %d 次）。任务一直停在「已提交」：站点已经收到请求，"
+                "但上游还没有接受建任务。\n"
+                "这通常是上游在排队或临时故障（上游会回 502 Bad Gateway），"
+                "和你的提示词、参考素材无关。\n"
+                "建议：等 1～2 分钟直接重跑；连续几次都这样，就是上游在故障，等它恢复。"
+                % attempts
+            )
         raise XHCYError(f"等待超时，已查询 {attempts} 次，最后状态：{last_status}")
 
     @staticmethod
