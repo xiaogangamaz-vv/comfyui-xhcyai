@@ -84,6 +84,11 @@ MATERIAL_IMAGE_QUALITY = 95
 # 上限按「base64 后不超 Cloudflare 单请求 100 MB」反推：raw×1.34 是实际上传量。
 MAX_MATERIAL_BYTES = 48 * 1024 * 1024      # 单个素材，base64 后约 64 MB
 MAX_MATERIAL_TOTAL = 60 * 1024 * 1024      # 整个请求，base64 后约 80 MB
+
+# 参考视频的时长限制来自站点上游的硬校验（错误码 2013）：
+#   media duration must be between 2 and 15.5 seconds
+REF_VIDEO_MIN_SECONDS = 2.0
+REF_VIDEO_MAX_SECONDS = 15.5
 MAX_VIDEO_BYTES = 512 * 1024 * 1024        # result download cap
 
 
@@ -180,6 +185,26 @@ def image_tensor_to_uri(tensor) -> str:
 
 def video_input_to_uri(video) -> str:
     """ComfyUI VIDEO input -> MP4 data URI."""
+    # 站点对参考视频有硬性要求，且只在提交之后才检查，被拒时已经消耗了一次请求。
+    # 实测报错原文：media duration must be between 2 and 15.5 seconds /
+    # media metadata is invalid。先在这里挡掉，用户立刻看到中文原因。
+    duration = None
+    if hasattr(video, "get_duration"):
+        try:
+            value = float(video.get_duration())
+            if value > 0:
+                duration = value
+        except Exception:
+            duration = None
+    if duration is not None and not (
+        REF_VIDEO_MIN_SECONDS <= duration <= REF_VIDEO_MAX_SECONDS
+    ):
+        raise XHCYError(
+            "参考视频时长 %.1f 秒，站点只接受 %.0f～%.1f 秒。\n"
+            "请先裁剪再连接（可用 ComfyUI 的视频裁剪/截取节点）。"
+            % (duration, REF_VIDEO_MIN_SECONDS, REF_VIDEO_MAX_SECONDS)
+        )
+
     source = None
     if hasattr(video, "get_stream_source"):
         try:
@@ -202,6 +227,19 @@ def video_input_to_uri(video) -> str:
             raw = handle.read()
     else:
         raise XHCYError("无法读取参考视频的内容（不支持的 VIDEO 来源）")
+
+    # 站点只接受 MP4；WebM/AVI 会被上游以 "media metadata is invalid" 拒掉，
+    # 而那一步已经是真实请求了。只在能确定格式时提前拦，避免误杀少见封装。
+    if raw[:4] == b"\x1a\x45\xdf\xa3":
+        raise XHCYError(
+            "参考视频是 WebM 格式，站点只接受 MP4（其他封装会被拒：media metadata is invalid）。\n"
+            "请先用 MP4 重编码再连接。"
+        )
+    if raw[:4] == b"RIFF" and raw[8:12] == b"AVI ":
+        raise XHCYError(
+            "参考视频是 AVI 格式，站点只接受 MP4（其他封装会被拒：media metadata is invalid）。\n"
+            "请先用 MP4 重编码再连接。"
+        )
 
     if len(raw) > MAX_MATERIAL_BYTES:
         raise XHCYError(
