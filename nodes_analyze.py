@@ -59,18 +59,20 @@ except ImportError:  # allow running this file standalone for debugging
 
 # 站点当前登记的文本模型。是否支持看图按公开常识标注，
 # 实际以站点渠道为准；选错时节点会用人话报错而不是把失败藏起来。
+#
+# ⚠️ 2026-10-21 实测（从生产机线路，避免本机 Cloudflare 拦截）：
+#   可用：gemini-3-flash / claude-fable-5 / claude-fable-5-1 /
+#         claude-opus-5-5 / gpt-6.1-sol
+#   不可用：gemini-3.8-flash、gemini-3.1-pro（渠道不可用）、
+#           deepseek-v4.1-flash（渠道不可用）、
+#           MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat（请求失败）
+# 按「下拉里只放真正能用的选项」的原则，这里只列实测通过的。
 MODEL_CAPABILITY = {
     "gemini-3-flash": "vision",
-    "gemini-3.8-flash": "vision",
-    "gemini-3.1-pro": "vision",
-    "gpt-6.1-sol": "vision",
-    "claude-opus-5-5": "vision",
     "claude-fable-5": "vision",
     "claude-fable-5-1": "vision",
-    "MiniMax-VL-01": "vision",
-    "deepseek-v4.1-flash": "text",
-    "MiniMax-Text-01": "text",
-    "abab5.5s-chat": "text",
+    "claude-opus-5-5": "vision",
+    "gpt-6.1-sol": "vision",
 }
 
 MODEL_LIST = list(MODEL_CAPABILITY.keys())
@@ -78,8 +80,13 @@ DEFAULT_MODEL = "gemini-3-flash"
 
 # 站点若临时不可用，可用这里的顺序做降级提示
 VISION_HINT = (
-    "只有视觉模型能看图（gemini / claude / gpt / MiniMax-VL-01 系列）。"
-    "选纯文本模型又接了素材，会被上游拒绝。"
+    "只有视觉模型能看图。下面列的都是实测可用的视觉模型，"
+    "接了素材会按多模态消息发送。"
+)
+
+# 报错时列给用户看的可选视觉模型
+VISION_MODELS_HINT = " / ".join(
+    m for m in MODEL_CAPABILITY if MODEL_CAPABILITY[m] == "vision"
 )
 
 
@@ -331,7 +338,10 @@ class XHCYAnalyze:
         if not requirement:
             raise XHCYError("需求（requirement）不能为空")
         if model not in MODEL_CAPABILITY:
-            raise XHCYError(f"未知的模型：{model}")
+            raise XHCYError(
+                f"未知的模型：{model}\n"
+                f"当前可用的模型：{' / '.join(MODEL_LIST)}"
+            )
         if skill not in SKILLS:
             raise XHCYError(f"未知的角色：{skill}")
 
@@ -375,8 +385,8 @@ class XHCYAnalyze:
         if pieces and capability != "vision":
             raise XHCYError(
                 f"模型 {model} 看不了图片，只能处理文字。"
-                f"请换一个视觉模型（如 gemini-3-flash / claude-opus-5-5 / MiniMax-VL-01），"
-                f"或者把素材断开只留文字。{VISION_HINT}"
+                f"请换一个视觉模型（{VISION_MODELS_HINT}），"
+                f"或者把素材断开只留文字。"
             )
 
         # ---- 组装请求 ------------------------------------------------ #
@@ -412,7 +422,10 @@ class XHCYAnalyze:
             }
 
         client = XHCYClient(api_key, base_url)
-        response = client.chat(payload)
+        try:
+            response = client.chat(payload)
+        except XHCYError as exc:
+            raise XHCYError(self._explain_error(exc, model)) from exc
         text = extract_chat_text(response)
         if not text.strip():
             raise XHCYError("服务端没有返回文本内容")
@@ -437,6 +450,41 @@ class XHCYAnalyze:
             summary += "\n" + "\n".join(notes)
 
         return (prompt, storyboard, params, analysis, summary)
+
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _explain_error(exc: Exception, model: str) -> str:
+        """把站点的英文报错翻成人话，并指出下一步该做什么。"""
+        raw = str(exc)
+        low = raw.lower()
+
+        if "authentication failed" in low or "invalid token" in low:
+            return (
+                f"模型 {model} 的上游渠道认证失败——站点里该渠道的密钥失效了。\n"
+                f"这不是你的操作问题，需要站点管理员更新该渠道的 key。\n"
+                f"（原始报错：{raw[:120]}）"
+            )
+        if "is unavailable" in low or "no available channel" in low:
+            return (
+                f"模型 {model} 现在没有可用渠道——上游临时不可用或该渠道被停用了。\n"
+                f"可以换一个模型试试，或者等渠道恢复。\n"
+                f"（原始报错：{raw[:120]}）"
+            )
+        if "insufficient" in low or "quota" in low or "403" in low:
+            return (
+                f"模型 {model} 调用被拒——多半是账户额度不足或权限不够。\n"
+                f"请检查站点的额度与该模型的授权。\n"
+                f"（原始报错：{raw[:120]}）"
+            )
+        if "upstream provider request failed" in low:
+            return (
+                f"模型 {model} 的上游拒绝了请求。常见原因：请求体太大"
+                f"（素材太多）、参数不被接受，或上游临时故障。\n"
+                f"可以少接几张图再试。\n"
+                f"（原始报错：{raw[:120]}）"
+            )
+        return f"调用模型 {model} 失败：{raw[:200]}"
 
     # ------------------------------------------------------------------ #
 
