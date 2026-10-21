@@ -20,6 +20,7 @@ try:
     from .xhcy_h3_specs import MODELS as _MODELS
     from .xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS
     from .xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS
+    from .xhcy_v3 import as_v3_node
     from .xhcy_video_base import (
         XHCYVideoBase,
         audio_input_to_uri,
@@ -35,6 +36,7 @@ except ImportError:  # 允许单文件直接运行调试
     from xhcy_h3_specs import MODELS as _MODELS  # type: ignore
     from xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS  # type: ignore
     from xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS  # type: ignore
+    from xhcy_v3 import as_v3_node  # type: ignore
     from xhcy_video_base import (  # type: ignore
         XHCYVideoBase,
         audio_input_to_uri,
@@ -136,7 +138,7 @@ class XHCYMiniMaxH3Reference(XHCYVideoBase):
 
 
 NODE_CLASS_MAPPINGS = {
-    "xhcy_minimax_h3_ref": XHCYMiniMaxH3Reference,
+    "xhcy_minimax_h3_ref": as_v3_node(XHCYMiniMaxH3Reference, "xhcy_minimax_h3_ref", "XHCY MiniMax H3（多模态参考）"),
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
