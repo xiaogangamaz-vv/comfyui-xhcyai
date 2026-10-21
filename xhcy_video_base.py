@@ -409,6 +409,14 @@ class XHCYVideoBase:
         """由子类实现：组装 content 数组。"""
         return [{"type": "text", "text": prompt}]
 
+    @classmethod
+    def build_payload_extra(cls, kwargs: dict) -> dict:
+        """子类可覆盖：往提交体里追加平台支持的额外字段。
+
+        默认什么都不加，保证老节点行为不变。
+        """
+        return {}
+
     def generate(self, prompt, model, api_key, resolution, duration, ratio,
                  max_poll_attempts, poll_interval, base_url=DEFAULT_BASE_URL, **kwargs):
         prompt = (prompt or "").strip()
@@ -450,6 +458,7 @@ class XHCYVideoBase:
             "duration": seconds,
             "ratio": ratio,
             "content": content,
+            **self.build_payload_extra(kwargs),
             # 让站点把「提交上游」放到后台，请求立刻返回任务号。
             # 带参考素材的请求要等站点把几十 MB 转发给上游建任务，实测会超过
             # Cloudflare 固定的 100 秒上限（返回 524，任务却可能已经建好）。
