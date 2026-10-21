@@ -27,6 +27,7 @@ try:
         extract_prompt,
         extract_task_id,
     )
+    from .xhcy_v3 import as_v3_node
     from .xhcy_video_base import (
         audio_input_to_uri,
         image_tensor_to_uri,
@@ -42,6 +43,7 @@ except ImportError:  # allow running this file standalone for debugging
         extract_prompt,
         extract_task_id,
     )
+    from xhcy_v3 import as_v3_node  # type: ignore
     from xhcy_video_base import (  # type: ignore
         audio_input_to_uri,
         image_tensor_to_uri,
@@ -246,7 +248,7 @@ class XHCYMiniMaxH3ContextIR:
 
 
 NODE_CLASS_MAPPINGS = {
-    "xhcy_h3_context_ir": XHCYMiniMaxH3ContextIR,
+    "xhcy_h3_context_ir": as_v3_node(XHCYMiniMaxH3ContextIR, "xhcy_h3_context_ir", "XHCY MiniMax H3 Context-IR（提示词增强）"),
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
