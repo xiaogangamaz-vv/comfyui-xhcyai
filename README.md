@@ -33,6 +33,7 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | **XHCY MiniMax H3（多模态参考）** | XHCY/Video | 接 `image1`~`image9`、`video1`~`video3`、`audio1`~`audio3`；什么都不接就是纯文生视频 |
 | **XHCY MiniMax H3（768P→2K 再生成）** | XHCY/Video | 把已有的 768P 视频提升到 2K。填任务号，或直接接一段源视频 |
 | **XHCY MiniMax H3 Context-IR（提示词增强）** | XHCY/Video | 把粗略想法扩写成成片的提示词。可纯文本，也可带图/视频/音频做多模态增强 |
+| **XHCY Seedance 2.0（文生 / 首尾帧 / 多模态参考）** | XHCY/Video | 一个节点四种用法。下拉切换 `doubao-seedance-2-0` / `-fast` / `-mini`；480P~4K（标准版）、4–15 秒，可生成同步音频 |
 | **XHCY 文本 / 对话（LLM）** | XHCY/Text | 站点上的文本与多模态模型，走 `POST /v1/chat/completions` |
 | **XHCY 智能分析（多模态·角色化）** | XHCY/Text | 上传素材 + 选角色 + 说需求 → 产出提示词 / 分镜 / 参数建议，可直接接给下游节点 |
 | comfyui xinghuo nano banana | 星火/Secure Image | 旧节点（打的是另一家服务，与本站无关，保留兼容） |
@@ -231,6 +232,54 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | `base_url` | 站点地址 |
 
 输出：`enhanced_prompt`（增强后的提示词，可直接接到文生视频节点的提示词输入）/ `status` / `task_id`。
+
+---
+
+### XHCY Seedance 2.0 参数
+
+走 `POST /v1/video/generations`（站点内部转发到火山引擎方舟）。
+**一个节点覆盖四种用法**，靠「接了什么素材」自动判断：
+
+| 你接了什么 | 实际走哪种模式 |
+| --- | --- |
+| 什么都不接 | 纯文生视频 |
+| 只接 `first_frame` | 以这张图开头的图生视频 |
+| `first_frame` + `last_frame` | 首尾帧过渡 |
+| `image1`~`image9` / `video1`~`video3` / `audio1`~`audio3` | 多模态参考 |
+
+**首尾帧与参考素材互斥**（Ark 的硬约束）：同时接会直接报中文错误，不会白扣费。
+只接 `last_frame` 也会被拒——尾帧模式必须先给首帧。
+
+| 输入 | 说明 |
+| --- | --- |
+| `prompt` | 视频描述，必填。参考图按顺序用「Image 1」「Image 2」引用 |
+| `model` | `doubao-seedance-2-0`（标准）/ `-fast`（速度优先）/ `-mini`（经济） |
+| `api_key` | XHCY AI 访问密钥 |
+| `resolution` | `480P` / `720P` / `1080P` / `4K`（后两档只有标准版支持） |
+| `duration` | 4～15 秒，按秒计费。填到范围外会自动收进合法区间并提示 |
+| `ratio` | `adaptive` / `21:9` / `16:9` / `4:3` / `1:1` / `3:4` / `9:16` |
+| `generate_audio` | 打开后视频带**原生同步音频**（人声/环境音/音效）。不影响价格 |
+| `watermark` | 打开后右下角有平台水印。一般保持关闭 |
+| `web_search` | 打开后允许模型联网检索现实资料再生成（真实地点、时事元素） |
+
+输出：`video` / `status` / `video_path`。
+
+**⚠️ 分辨率的写法和 H3 不一样**：Seedance 用 **720P / 4K**，H3 用 **768P / 2K**。
+两套表不能混用，填错站点会直接拒。
+
+**价格（按输出秒数，站点公示）**
+
+| 变体 | 480P | 720P | 1080P | 4K |
+| --- | --- | --- | --- | --- |
+| 标准版 | 0.60 元/s | 1.29 元/s | 3.22 元/s | 6.57 元/s |
+| Fast | 0.48 元/s | 1.04 元/s | — | — |
+| Mini | 0.30 元/s | 0.64 元/s | — | — |
+
+参考音频免费；**参考视频按输出分辨率同样计费**（相当于双份）。
+4 秒 480P 的成本：Mini 约 1.2 元 / Fast 约 1.9 元 / 标准约 2.4 元。
+
+**不支持 `seed` 和 `camera_fixed`**：这两个是 Seedance 1.0 的字段，
+2.0 会静默忽略，所以节点里不提供，避免让你以为能控制随机性。
 
 ---
 
