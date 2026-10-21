@@ -30,7 +30,7 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | **XHCY Seedream 5.0（文生图 / 多图参考 / 图层拆分）** | XHCY/Image | 同一家族四个变体。带 `/layer-decomposition` 的两个变体做**图层拆分**，需要且只需要接 1 张图 |
 | **XHCY MiniMax H3（文生视频）** | XHCY/Video | 走 `POST /v1/video/generations`，下拉切换 `MiniMax-H3` / `MiniMax-H3-Lite` |
 | **XHCY MiniMax H3（首尾帧 / 图生视频）** | XHCY/Video | 接 `first_frame` / `last_frame`，让视频从指定画面开始、到指定画面结束；只接一张就是普通图生视频 |
-| **XHCY MiniMax H3（多模态参考）** | XHCY/Video | 接 `image1`~`image9`、`video1`~`video3`、`audio1`~`audio3`；什么都不接就是纯文生视频 |
+| **XHCY MiniMax H3（多模态参考）** | XHCY/Video | **动态插槽**：接一个自动长一个。参考图最多 9 张、视频 3 段、音频 3 段；什么都不接就是纯文生视频 |
 | **XHCY MiniMax H3（768P→2K 再生成）** | XHCY/Video | 把已有的 768P 视频提升到 2K。填任务号，或直接接一段源视频 |
 | **XHCY MiniMax H3 Context-IR（提示词增强）** | XHCY/Video | 把粗略想法扩写成成片的提示词。可纯文本，也可带图/视频/音频做多模态增强 |
 | **XHCY Seedance 2.0（文生 / 首尾帧 / 多模态参考）** | XHCY/Video | 一个节点四种用法。下拉切换 `doubao-seedance-2-0` / `-fast` / `-mini`；480P~4K（标准版）、4–15 秒，可生成同步音频 |
@@ -174,7 +174,23 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | 节点 | 素材输入 | 说明 |
 | --- | --- | --- |
 | **首尾帧 / 图生视频** | `first_frame`、`last_frame` | 至少接一张。只接 `first_frame` = 以它为开头的图生视频；两张都接 = 从首帧过渡到尾帧 |
-| **多模态参考** | `image1`~`image9`、`video1`~`video3`、`audio1`~`audio3` | 想接哪个接哪个。全都不接 = 纯文生视频 |
+| **多模态参考** | **动态插槽**（见下） | 接一个就自动长出一个新插槽。全都不接 = 纯文生视频 |
+
+> **多模态参考的插槽是动态的**（2026-10-21 改）
+>
+> 不再是一排固定空着的 `image1`~`image9`，而是三组「接一个长一个」的插槽：
+>
+> | 组 | 插槽名 | 上限 |
+> | --- | --- | --- |
+> | 参考图 | `ref_images.ref_image_0`、`ref_image_1` … | 9 张 |
+> | 参考视频 | `ref_videos.ref_video_0`、`ref_video_1` … | 3 段 |
+> | 参考音频 | `ref_audios.ref_audio_0`、`ref_audio_1` … | 3 段 |
+>
+> 序号从 **0** 开始，但提示词里仍按「Image 1」「Image 2」引用（节点内部会 +1 对齐）。
+>
+> ⚠️ **旧工作流需要重新连线**：原先接在 `image1` / `video1` / `audio1` 上的连线，
+> 现在要改接到 `ref_images.ref_image_0` / `ref_videos.ref_video_0` /
+> `ref_audios.ref_audio_0`。输入名变了，这是唯一的破坏性改动。
 
 > **多图参考的提示词写法**：按顺序用「Image 1」「Image 2」引用对应编号的参考图，
 > 例如「让 Image 1 里的女孩穿上 Image 2 的裙子」。不点名的话，模型不知道哪张是哪个。
