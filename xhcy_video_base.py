@@ -20,6 +20,8 @@ from __future__ import annotations
 import base64
 import io
 import os
+import shutil
+import subprocess
 import time
 import uuid
 import wave
@@ -89,6 +91,17 @@ MAX_MATERIAL_TOTAL = 60 * 1024 * 1024      # 整个请求，base64 后约 80 MB
 #   media duration must be between 2 and 15.5 seconds
 REF_VIDEO_MIN_SECONDS = 2.0
 REF_VIDEO_MAX_SECONDS = 15.5
+# 上游对参考视频的分辨率有下限，低于 480p 会被直接拒（实测报错原文：
+# "The video resolution is too low ... The minimum resolution requirement is 480p"）。
+# 用短边判定，竖屏 480x854 也算合格。
+REF_VIDEO_MIN_EDGE = 480
+# base64 会把体积放大三分之一，太大就会拖死上传：实测 5.5 MB 的参考视频
+# 让整包涨到 8.3 MB，站点提交到上游 8 分钟都没传完（context deadline exceeded）。
+# 超过阈值先在本机压到这个目标以内再发。
+REF_VIDEO_COMPRESS_OVER = 3 * 1024 * 1024
+REF_VIDEO_COMPRESS_TARGET = 2 * 1024 * 1024
+# 压缩时把长边收在这个范围内——参考视频只需要让模型看清内容与动作
+REF_VIDEO_MAX_EDGE = 1280
 MAX_VIDEO_BYTES = 512 * 1024 * 1024        # result download cap
 
 
@@ -183,6 +196,82 @@ def image_tensor_to_uri(tensor) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
 
 
+def _ffmpeg_exe() -> str:
+    """找一个能用�� ffmpeg。ComfyUI 生态里 imageio_ffmpeg 最普遍，优先用它。"""
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.isfile(exe):
+            return exe
+    except Exception:
+        pass
+    try:
+        import av  # type: ignore  # noqa: F401
+    except Exception:
+        pass
+    return shutil.which("ffmpeg") or ""
+
+
+def compress_reference_video(
+    raw: bytes, duration: float | None, target_bytes: int = REF_VIDEO_COMPRESS_TARGET
+) -> bytes | None:
+    """把参考视频压到目标体积以内。压不了就返回 None（调用方决定怎么办）。
+
+    只做「降码率 + 限制长边」，不改时长、不改内容、不改朝向——
+    参考视频的作用是让模型看懂动作和场景，不需要原始画质。
+    """
+    exe = _ffmpeg_exe()
+    if not exe:
+        return None
+
+    src = None
+    dst = None
+    try:
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as handle:
+            handle.write(raw)
+            src = handle.name
+        dst = os.path.splitext(src)[0] + "_small.mp4"
+
+        # 目标码率：按秒数分摊，留 15% 余量给容器与音频
+        if duration and duration > 0:
+            kbps = max(300, int(target_bytes * 8 / duration / 1000 * 0.85))
+        else:
+            kbps = 2000
+
+        cmd = [
+            exe, "-y", "-v", "error",
+            "-i", src,
+            "-vf",
+            f"scale=w='min({REF_VIDEO_MAX_EDGE},iw)':h='min({REF_VIDEO_MAX_EDGE},ih)'"
+            ":force_original_aspect_ratio=decrease:force_divisible_by=2",
+            "-c:v", "libx264", "-preset", "veryfast",
+            "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{kbps * 2}k",
+            "-c:a", "aac", "-b:a", "64k",
+            "-movflags", "+faststart",
+            dst,
+        ]
+        proc = subprocess.run(cmd, capture_output=True, timeout=180)
+        if proc.returncode != 0 or not os.path.isfile(dst):
+            return None
+        with open(dst, "rb") as handle:
+            out = handle.read()
+        if not out:
+            return None
+        return out
+    except Exception:
+        return None
+    finally:
+        for path in (src, dst):
+            if path and os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
 def video_input_to_uri(video) -> str:
     """ComfyUI VIDEO input -> MP4 data URI."""
     # 站点对参考视频有硬性要求，且只在提交之后才检查，被拒时已经消耗了一次请求。
@@ -204,6 +293,22 @@ def video_input_to_uri(video) -> str:
             "请先裁剪再连接（可用 ComfyUI 的视频裁剪/截取节点）。"
             % (duration, REF_VIDEO_MIN_SECONDS, REF_VIDEO_MAX_SECONDS)
         )
+
+    # 分辨率下限：上游会直接拒掉低于 480p 的视频，而它的报错只在提交之后
+    # 才回来（还要等重试），所以先在这里拦。用短边判定，竖屏也算。
+    try:
+        dims = video.get_dimensions() if hasattr(video, "get_dimensions") else None
+    except Exception:
+        dims = None
+    if dims:
+        width, height = int(dims[0]), int(dims[1])
+        short_edge = min(width, height)
+        if short_edge < REF_VIDEO_MIN_EDGE:
+            raise XHCYError(
+                "参考视频分辨率太低：%d×%d，上游要求至少 480p（短边 ≥ %d）。\n"
+                "请换一段清晰一些的视频，或先用超分/放大节点处理再连接。"
+                % (width, height, REF_VIDEO_MIN_EDGE)
+            )
 
     source = None
     if hasattr(video, "get_stream_source"):
@@ -246,6 +351,21 @@ def video_input_to_uri(video) -> str:
             "参考视频超过 %d MiB，请先压缩或剪短后再连接"
             % (MAX_MATERIAL_BYTES // (1024 * 1024))
         )
+
+    # 体积压到能传得动为止。base64 会把字节数放大到 4/3，实测 5.5 MB 的视频
+    # 让整包涨到 8.3 MB，站点提交上游 8 分钟传不完，用户只看到「一直转圈」。
+    original_size = len(raw)
+    if original_size > REF_VIDEO_COMPRESS_OVER:
+        smaller = compress_reference_video(raw, duration, REF_VIDEO_COMPRESS_TARGET)
+        if smaller is not None and len(smaller) < original_size:
+            raw = smaller
+        elif len(raw) > REF_VIDEO_COMPRESS_TARGET * 2:
+            raise XHCYError(
+                "参考视频有 %.1f MiB，压缩也压不下来，直接提交很可能在上传阶段超时。\n"
+                "请先剪短或降低分辨率再连接（目标 2 MiB 以内）。"
+                % (original_size / 1024 / 1024)
+            )
+
     _charge_budget(raw, "参考视频")
     return "data:video/mp4;base64," + base64.b64encode(raw).decode("ascii")
 
