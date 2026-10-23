@@ -34,27 +34,30 @@ except ImportError:  # allow running this file standalone for debugging
     from xhcy_image_base import tensor_to_data_uri  # type: ignore
 
 
-# 站点当前可用的文本模型（GET /v1/models，2026-10-15）
+# 站点当前公开的文本模型（GET /api/public-models，2026-10-23 核对）
+#
+# 已剔除 MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat：
+# 这三个挂在只做视频的 metaso 渠道上，站点也不再对外公开，调文本会失败。
 MODEL_LIST = [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
     "deepseek-v4.1-flash",
+    "deepseek-v4.1-flash-1017",
     "gpt-6.1-sol",
     "claude-opus-5-5",
     "claude-fable-5",
     "claude-fable-5-1",
-    "gemini-3.8-flash",
-    "gemini-3.1-pro",
     "gemini-3-flash",
-    "MiniMax-Text-01",
-    "MiniMax-VL-01",
-    "abab5.5s-chat",
+    "gemini-3.1-pro",
+    "gemini-3.8-flash",
 ]
 
-DEFAULT_MODEL = "deepseek-v4.1-flash"
+DEFAULT_MODEL = "gemini-3-flash"
 
 # 站点没有给出各模型的能力清单，这里按公开常识标注，仅用于提示
 _VISION_HINT = (
     "接了图片就会按多模态消息发送（图片转成 data URI 内嵌）。"
-    "只有视觉模型支持，例如 MiniMax-VL-01、gemini / claude / gpt 系列；"
+    "只有视觉模型支持，例如 gemini / claude / gpt 系列；"
     "纯文本模型接了图会被上游拒绝。"
 )
 

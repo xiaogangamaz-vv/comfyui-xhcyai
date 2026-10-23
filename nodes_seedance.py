@@ -25,7 +25,9 @@ try:
     from .xhcy_seedance_specs import MAX_REF_AUDIOS
     from .xhcy_seedance_specs import MAX_REF_IMAGES
     from .xhcy_seedance_specs import MAX_REF_VIDEOS
+    from .xhcy_seedance_specs import MEDIA_LIMITS as _MEDIA_LIMITS
     from .xhcy_seedance_specs import MODELS as _MODELS
+    from .xhcy_seedance_specs import PROMPT_MAX_CHARS as _PROMPT_MAX_CHARS
     from .xhcy_seedance_specs import RATIO_LIMITS as _RATIO_LIMITS
     from .xhcy_seedance_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS
     from .xhcy_v3 import as_v3_node
@@ -45,7 +47,9 @@ except ImportError:  # 允许单文件直接运行调试
     from xhcy_seedance_specs import MAX_REF_AUDIOS  # type: ignore
     from xhcy_seedance_specs import MAX_REF_IMAGES  # type: ignore
     from xhcy_seedance_specs import MAX_REF_VIDEOS  # type: ignore
+    from xhcy_seedance_specs import MEDIA_LIMITS as _MEDIA_LIMITS  # type: ignore
     from xhcy_seedance_specs import MODELS as _MODELS  # type: ignore
+    from xhcy_seedance_specs import PROMPT_MAX_CHARS as _PROMPT_MAX_CHARS  # type: ignore
     from xhcy_seedance_specs import RATIO_LIMITS as _RATIO_LIMITS  # type: ignore
     from xhcy_seedance_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS  # type: ignore
     from xhcy_v3 import as_v3_node  # type: ignore
@@ -64,6 +68,9 @@ class XHCYSeedance2(XHCYVideoBase):
     RESOLUTION_LIMITS = _RESOLUTION_LIMITS
     RATIO_LIMITS = _RATIO_LIMITS
     DURATION_LIMITS = _DURATION_LIMITS
+    # 素材数量按站点 limits 校验（9 图 + 3 视频 + 3 音频，合计 ≤ 15）
+    MEDIA_LIMITS = _MEDIA_LIMITS
+    PROMPT_MAX_CHARS = _PROMPT_MAX_CHARS
 
     DEFAULT_MODEL = _DEFAULT_MODEL
     DEFAULT_RESOLUTION = _DEFAULT_RESOLUTION

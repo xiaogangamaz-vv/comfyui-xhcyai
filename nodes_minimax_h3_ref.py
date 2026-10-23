@@ -27,7 +27,9 @@ try:
     from .xhcy_h3_specs import DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION
     from .xhcy_h3_specs import DURATION_LIMITS as _DURATION_LIMITS
     from .xhcy_h3_specs import MODELS as _MODELS
+    from .xhcy_h3_specs import PROMPT_MAX_CHARS as _PROMPT_MAX_CHARS
     from .xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS
+    from .xhcy_h3_specs import REFERENCE_LIMITS as _REFERENCE_LIMITS
     from .xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS
     from .xhcy_video_base import DEFAULT_BASE_URL
     from .xhcy_video_base import (
@@ -43,7 +45,9 @@ except ImportError:  # 允许单文件直接运行调试
     from xhcy_h3_specs import DEFAULT_RESOLUTION as _DEFAULT_RESOLUTION  # type: ignore
     from xhcy_h3_specs import DURATION_LIMITS as _DURATION_LIMITS  # type: ignore
     from xhcy_h3_specs import MODELS as _MODELS  # type: ignore
+    from xhcy_h3_specs import PROMPT_MAX_CHARS as _PROMPT_MAX_CHARS  # type: ignore
     from xhcy_h3_specs import RATIO_LIMITS as _RATIO_LIMITS  # type: ignore
+    from xhcy_h3_specs import REFERENCE_LIMITS as _REFERENCE_LIMITS  # type: ignore
     from xhcy_h3_specs import RESOLUTION_LIMITS as _RESOLUTION_LIMITS  # type: ignore
     from xhcy_video_base import DEFAULT_BASE_URL  # type: ignore
     from xhcy_video_base import (  # type: ignore
@@ -114,6 +118,9 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
     RESOLUTION_LIMITS = _RESOLUTION_LIMITS
     RATIO_LIMITS = _RATIO_LIMITS
     DURATION_LIMITS = _DURATION_LIMITS
+    # 素材数量上限按站点 limits 逐模型校验（Lite 没有参考视频）
+    MEDIA_LIMITS = _REFERENCE_LIMITS
+    PROMPT_MAX_CHARS = _PROMPT_MAX_CHARS
     DEFAULT_MODEL = _DEFAULT_MODEL
     DEFAULT_RESOLUTION = _DEFAULT_RESOLUTION
     DEFAULT_DURATION = _DEFAULT_DURATION
