@@ -131,10 +131,16 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
     CATEGORY = "XHCY/Video"
     DESCRIPTION = "XHCY AI · MiniMax H3 多模态参考生视频（参考图 / 参考视频 / 参考音频）"
 
-    # ⚠️ 必须显式声明：io.ComfyNode 会把 FUNCTION 改写成
-    # "EXECUTE_NORMALIZED"，execute 里再取 cls.FUNCTION 就会调回自己 → 无限递归。
-    FUNCTION = "generate"
-
+    # ⚠️ 不要在这里声明 FUNCTION = "generate"。
+    #
+    # io.ComfyNode 用 classproperty 把 FUNCTION 算成 "EXECUTE_NORMALIZED"，
+    # 而 ComfyUI 的 execution.py 会执行：
+    #     getattr(type_obj, obj.FUNCTION).__func__
+    # 只有 classmethod 才有 __func__。如果本类把 FUNCTION 写死成 "generate"，
+    # 上面那行拿到的是普通函数，直接抛
+    #     AttributeError: 'function' object has no attribute '__func__'
+    # 2026-10-23 就是这么炸的。执行逻辑由 execute() 里显式调 generate 完成，
+    # 不需要靠 FUNCTION 传方法名。
     # ------------------------------------------------------------------ #
 
     @classmethod
@@ -272,7 +278,16 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
         merged.update(expand_autogrow(kwargs))
 
         instance = cls.__new__(cls)
-        return getattr(instance, cls.FUNCTION)(**merged)
+        # 这里必须写死 "generate"，不能读 cls.FUNCTION。
+        #
+        # 原因：io.ComfyNode 用 classproperty 把 FUNCTION 算成
+        # "EXECUTE_NORMALIZED"，ComfyUI 的 execution.py 会拿它去做
+        #   getattr(type_obj, obj.FUNCTION).__func__
+        # 只有 classmethod 才有 __func__。一旦在本类里把 FUNCTION 写死成
+        # "generate"（普通方法），上面那行就会抛
+        #   AttributeError: 'function' object has no attribute '__func__'
+        # —— 2026-10-23 线上报的就是这个。
+        return getattr(instance, "generate")(**merged)
 
     # ------------------------------------------------------------------ #
 
