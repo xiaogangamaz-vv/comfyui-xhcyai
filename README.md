@@ -24,9 +24,9 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 | 节点 | 分类 | 说明 |
 | --- | --- | --- |
-| **XHCY GPT Image 2.5（文生图 / 多图参考）** | XHCY/Image | 不接参考图 = 文生图，接 `image1`~`image16` = 多图参考。下拉切换 `gpt-image-2.5` / `-flare` / `-sunburst` |
-| **XHCY GPT Image 2（文生图 / 多图参考）** | XHCY/Image | 同上。下拉切换 `gpt-image-2`（本站只允许 1024×1024）/ `-all` / `-vip`（可到 4K） |
-| **XHCY Nano Banana（文生图 / 多图参考）** | XHCY/Image | 同上。该家族**只支持 1024x1024**，所以节点上不显示画幅 / 分辨率 / 画质下拉 |
+| **XHCY GPT Image 2.5（文生图 / 多图参考）** | XHCY/Image | 不接参考图 = 文生图，接 `image1`~`image16` = 多图参考。**基版只认 2 种尺寸，**`-flare` / `-sunburst`** 十四种画幅 × 1K/2K/4K 全开** |
+| **XHCY GPT Image 2（文生图 / 多图参考）** | XHCY/Image | `gpt-image-2` 只认 1024×1024；`-all` 上游不收 size（只能 auto）；`-vip` 全开 |
+| **XHCY Nano Banana（文生图 / 多图参考）** | XHCY/Image | **五种画幅**（1:1 / 2:3 / 3:2 / 16:9 / 9:16），1K 与 4K。能力随 `model` 变体不同，见下方对照表 |
 | **XHCY Seedream 5.0（文生图 / 多图参考 / 图层拆分）** | XHCY/Image | 同一家族四个变体。带 `/layer-decomposition` 的两个变体做**图层拆分**，需要且只需要接 1 张图 |
 | **XHCY MiniMax H3（文生视频）** | XHCY/Video | 走 `POST /v1/video/generations`，下拉切换 `MiniMax-H3` / `MiniMax-H3-Lite` |
 | **XHCY MiniMax H3（首尾帧 / 图生视频）** | XHCY/Video | 接 `first_frame` / `last_frame`，让视频从指定画面开始、到指定画面结束；只接一张就是普通图生视频 |
@@ -41,6 +41,44 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 ---
 
 ## 图像节点
+
+### 尺寸能力对照表（2026-10-23 按站点源码补齐）
+
+站点的尺寸白名单是**逐模型**的，同一个家族里有的变体只认一个尺寸、有的认八种。
+下表取自后端源码 `relay/billing/ratio/image.go`（`ImageSizeRatios`）与
+`relay/billing/ratio/image_nano_banana_params.go`，是站点自己执行的规则。
+
+| 模型 | 站点规则 | 可用画幅 × 档位 |
+| --- | --- | --- |
+| `nano-banana-2` | 严格白名单 | 1:1 @ 1K |
+| `nano-banana-pro` | 严格白名单 | 1:1 @ 1K |
+| `gemini-nano-banana-2.1` | 严格白名单 | 1:1 @ 1K / 4K；2:3、3:2、16:9、9:16 @ 1K 或 4K |
+| `nano-banana-fast` | 不校验（直通） | 同 gemini 那八种组合 |
+| `nano-banana` | 不校验（直通） | 同上 |
+| `gpt-image-2` | 严格白名单 | 1:1 @ 1K |
+| `gpt-image-2-all` | 直通，但**上游拒收 size** | 只能 `auto`（不传 size） |
+| `gpt-image-2-vip` | 不校验（直通） | 14 种画幅 × 1K / 2K / 4K |
+| `gpt-image-2.5` | 严格白名单 | 1:1 @ 1K、9:16 @ 1K |
+| `gpt-image-2.5-flare` | 不校验（直通） | 14 种画幅 × 1K / 2K / 4K |
+| `gpt-image-2.5-sunburst` | 不校验（直通） | 同上，画质另可到 xhigh / max |
+
+**选到不支持的组合时，节点会在发请求前就拦下来**，并告诉你这个模型能用什么，
+不会白扣费。例如：
+
+```
+nano-banana-2 不支持「16:9 + 1K」。
+它在本站可用的组合只有：1:1 @ 1K
+（选其它变体，或改成上面列出的组合）
+```
+
+> **⚠️ 关于 `gemini-nano-banana-2.1` 的档位**
+>
+> 这个模型的上游不接受像素尺寸，只接受「比例 + 档位」。站点内部会把像素框
+> 换算成比例形式再发出去，而且**非正方形框统一按 4K 档出图**。
+>
+> 实测：选 `2:3 @ 1K`（1024×1536），实际出图是 **3392×5056**（约 17 MP）。
+> 这是上游的既定行为，不是 bug——宽高比是对的，只是比你选的那一档更大。
+> 好处是画质更高，代价是文件大（单张约 18 MB）。
 
 ### XHCY GPT Image 2.5 参数
 
@@ -74,13 +112,14 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | 变体 | 档位 | 说明 |
 | --- | --- | --- |
 | `gpt-image-2` | 仅 1k | 站点定价模型，**尺寸白名单只有 1024×1024**。选到别的画幅时节点会直接告诉你改用下面两个变体，而不是让你去撞 `size_not_supported` |
-| `gpt-image-2-all` | 1k / 2k / 4k | 能力对标 nano banana 2，任意画幅（默认值） |
-| `gpt-image-2-vip` | 1k / 2k / 4k | 任意画幅 |
+| `gpt-image-2-all` | 只能 `auto` | **上游不接受 `size` 参数**（站点源码里标注为 "upstream rejects the size parameter"）。画幅必须选 `auto`，由模型自己决定尺寸；选具体画幅会被节点拦下 |
+| `gpt-image-2-vip` | 1k / 2k / 4k | 任意画幅（默认值，14 种画幅全开） |
 
 该家族没有画质档，所以节点上不显示 `quality`。
 
-> 站点只对**定价模型**（`nano-banana-2` / `nano-banana-pro` / `gpt-image-2`）做尺寸预校验，
-> `-all` / `-vip` 是原样转发上游。这两个变体的像素表沿用 GPT Image 2.5 那套已验证的约束
+> 站点只对**定价模型**（`nano-banana-2` / `nano-banana-pro` / `gpt-image-2` /
+> `gemini-nano-banana-2.1` / `gpt-image-2.5`）做尺寸预校验，其余是原样转发上游。
+> 直通模型的像素表沿用 GPT Image 2.5 那套已验证的约束
 > （长边 ≤ 3840、边长为 16 的倍数、比例不超过 3:1），**尚未逐个实测**。
 
 ### XHCY Nano Banana 参数
@@ -91,22 +130,31 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 | --- | --- |
 | `image1` ~ `image16` | **可选**。一个都不接 = 文生图；接 1 张以上 = 多图参考 |
 | `prompt` | 提示词，必填 |
-| `model` | `nano-banana-2`（推荐，实测最稳）/ `gemini-nano-banana-2.1` / `nano-banana-pro` / `nano-banana-fast` |
+| `model` | `nano-banana-2`（推荐，实测最稳）/ `gemini-nano-banana-2.1`（画幅最全）/ `nano-banana-pro` / `nano-banana-fast` / `nano-banana` |
 | `api_key` | XHCY AI 访问密钥，每个节点单独填 |
-| `aspect_ratio` | 画面比例。**本站只开放 `1:1`（另有 `auto` 等价）**，下拉里也只有这两项 |
-| `image_size` | 分辨率档位。**本站只开放 `1K`（即 1024×1024）**，下拉里只有这一项 |
+| `aspect_ratio` | `auto` / `1:1` / `2:3` / `3:2` / `16:9` / `9:16`。**能选哪些取决于 `model`**，见上面对照表 |
+| `image_size` | `1K` / `4K`。同样取决于 `model` |
 | `reply_type` | `async` / `sync`。本站禁用了异步图像生成，**选什么都不影响，都会按同步执行** |
 | `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔，默认 300 / 5 |
 | `base_url` | 站点地址，默认 `https://ai.xhcyai.org` |
 
 输出：`image` / `response_text`（摘要）/ `local_image_paths`（落盘路径）。
 
-> **尺寸限制（实测）**：该家族**只接受 `1024x1024`**。
-> 实测 `1024x1536` / `1536x1024` / `1280x720` / `2048x2048` / `4096x4096`
-> **全部返回 `size_not_supported`**。所以下拉里只保留本站真正支持的值——
-> 曾经给过全量选项，但那样会出现「选项在、一选就报错」的误导。
+> **尺寸能力（2026-10-23 按站点源码补齐）**
 >
-> **想要其它比例或更高分辨率，请换用 GPT Image 2.5 或`gpt-image-2-all`**。
+> 这个家族里各变体的尺寸能力**差别很大**：
+>
+> | 变体 | 能用的 |
+> | --- | --- |
+> | `nano-banana-2` / `nano-banana-pro` | 只有 **1:1 @ 1K**（1024×1024） |
+> | `gemini-nano-banana-2.1` | **五种画幅**：1:1 / 2:3 / 3:2 / 16:9 / 9:16；1:1 可选 1K 或 4K，其它走 4K 档 |
+> | `nano-banana-fast` / `nano-banana` | 直通上游、站点不校验，按同族八种组合给 |
+>
+> 想要非方图或大图，**选 `gemini-nano-banana-2.1`**。
+> 选了当前变体不支持的组合，节点会在发请求前拦下并列出它能用什么（不扣费）。
+>
+> **实测确认**：`gemini-nano-banana-2.1` + `2:3` + `1K` 成功出图，
+> 实际尺寸 **3392×5056**（约 17 MP）——非方图会按 4K 档出，比选的档更大。
 >
 > **速度差异**：实测带一张参考图时，`nano-banana-2` 约 51 秒，
 > 而 `gemini-nano-banana-2.1` 要约 **106 秒**——已经贴近网关的 100 秒等待上限，
