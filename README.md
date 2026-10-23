@@ -20,6 +20,55 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 
 3. 重启 ComfyUI，在节点面板 **XHCY** 分类下即可找到。
 
+## 参数与站点对齐（2026-10-23 全量核对）
+
+所有节点的下拉选项和校验规则，都以站点自己公布的规格为准，
+数据源是 `/api/video/models`、`/api/public-models`、
+`/api/model_provider_meta`，以及后端源码里的尺寸白名单。
+
+### 视频：分辨率 / 时长 / 比例
+
+| 模型 | 分辨率 | 时长 | 比例 |
+| --- | --- | --- | --- |
+| `MiniMax-H3` | 480P / 768P / 1080P / 2K | 4–30 秒 | 7 种（含 21:9、4:3、3:4） |
+| `MiniMax-H3-Lite` | 480P / 768P | 1–15 秒 | **4 种**（adaptive / 16:9 / 9:16 / 1:1） |
+| `doubao-seedance-2-0` | 480P / 720P / 1080P / 4K | 4–15 秒 | 7 种 |
+| `doubao-seedance-2-0-fast` | 480P / 720P | 4–15 秒 | 7 种 |
+| `doubao-seedance-2-0-mini` | 480P / 720P | 4–15 秒 | 7 种 |
+
+### 视频：参考素材上限
+
+| 模型 | 参考图 | 参考视频 | 参考音频 | 合计 |
+| --- | --- | --- | --- | --- |
+| `MiniMax-H3` | 9 | 3 | 3 | **≤ 12** |
+| `MiniMax-H3-Lite` | 9 | **不支持** | 3 | — |
+| 三个 Seedance 变体 | 9 | 3 | 3 | ≤ 15 |
+
+> **⚠️ `MiniMax-H3-Lite` 不支持参考视频**——站点的 limits 里根本没有这一项。
+> 之前节点对它也开放了 `video1`~`video3`，现在接上会直接报错说明。
+>
+> **提示词上限 7000 字**（站点 `prompt_max`），超出会在提交前拦下。
+
+### 图像：尺寸
+
+详细对照见下方「尺寸能力对照表」。
+`nano-banana` / `gpt-image` 家族已按站点白名单逐模型限定；
+`seedream` 走 apilio 渠道（站点不校验尺寸），保持已验证的 1K / 1.5K / 2K。
+
+### 文本：模型清单
+
+以 `/api/public-models` 为准，共 11 个：
+
+```
+deepseek-v4-flash · deepseek-v4-pro · deepseek-v4.1-flash ·
+deepseek-v4.1-flash-1017 · gpt-6.1-sol · claude-opus-5-5 ·
+claude-fable-5 · claude-fable-5-1 · gemini-3-flash ·
+gemini-3.1-pro · gemini-3.8-flash
+```
+
+> 已剔除 `MiniMax-Text-01` / `MiniMax-VL-01` / `abab5.5s-chat`：
+> 这三个挂在只做视频的 metaso 渠道上，站点也不再公开，调文本会失败。
+
 ## 节点清单
 
 | 节点 | 分类 | 说明 |

@@ -56,10 +56,26 @@ DEFAULT_RESOLUTION = "720P"
 DEFAULT_DURATION = 5
 DEFAULT_RATIO = "16:9"
 
-# 素材上限（站点 limits 字段）
+# 素材上限（站点 /api/video/models 的 limits 字段）
 MAX_REF_IMAGES = 9
 MAX_REF_VIDEOS = 3
 MAX_REF_AUDIOS = 3
+
+# 逐模型的素材数量上限，字段名与站点一致。三个 Seedance 变体完全相同：
+#   {"audio_requires_media": 1, "mixed_media": 15,
+#    "reference_audio": 3, "reference_images": 9, "reference_videos": 3}
+MEDIA_LIMITS = {
+    model: {
+        "reference_images": MAX_REF_IMAGES,
+        "reference_videos": MAX_REF_VIDEOS,
+        "reference_audios": MAX_REF_AUDIOS,
+        "mixed_media": 15,
+    }
+    for model in MODELS
+}
+
+# 站点 prompt_max
+PROMPT_MAX_CHARS = 7000
 
 # 首帧/尾帧（IMAGE），与参考素材互斥
 HAS_FRAME_INPUTS = True

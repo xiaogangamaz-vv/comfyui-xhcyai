@@ -417,6 +417,14 @@ class XHCYVideoBase:
     RESOLUTION_LIMITS: dict[str, list[str]] = {}
     RATIO_LIMITS: dict[str, list[str]] = {}
     DURATION_LIMITS: dict[str, tuple[int, int]] = {}
+    # 各模型的素材数量上限，逐项对齐站点 /api/video/models 返回的 limits。
+    # 键名与站点一致：
+    #   reference_images / reference_videos / reference_audios   单项上限
+    #   mixed_media                                             三项合计上限
+    # 值为 0 表示该模型不支持这类素材（例如 MiniMax-H3-Lite 没有参考视频）。
+    MEDIA_LIMITS: dict[str, dict[str, int]] = {}
+    # 站点 prompt_max：H3 与 Seedance 都是 7000 字符
+    PROMPT_MAX_CHARS = 7000
     DEFAULT_MODEL = ""
     DEFAULT_RESOLUTION = "768P"
     DEFAULT_DURATION = 5
@@ -537,11 +545,68 @@ class XHCYVideoBase:
         """
         return {}
 
+    @classmethod
+    def validate_media_limits(cls, model: str, content: list) -> None:
+        """按站点 limits 校验参考素材数量。
+
+        站点的 limits 是逐模型的：MiniMax-H3 允许 9 图 + 3 视频 + 3 音频、
+        合计不超过 12；MiniMax-H3-Lite 干脆没有参考视频这一项。
+        这些约束在提交后才由上游拒绝，会白白消耗一次请求，所以在本地先算。
+        """
+        limits = cls.MEDIA_LIMITS.get(model)
+        if not limits:
+            return
+
+        counts = {"image": 0, "video": 0, "audio": 0}
+        for item in content:
+            role = str(item.get("role") or "")
+            if not role.startswith("reference_"):
+                # first_frame / last_frame / 纯文本不占参考素材配额
+                continue
+            kind = role[len("reference_"):]
+            if kind in counts:
+                counts[kind] += 1
+
+        labels = {"image": "参考图", "video": "参考视频", "audio": "参考音频"}
+        for kind, key in (
+            ("image", "reference_images"),
+            ("video", "reference_videos"),
+            ("audio", "reference_audios"),
+        ):
+            cap = limits.get(key)
+            if cap is None:
+                continue
+            if cap == 0 and counts[kind] > 0:
+                raise XHCYError(
+                    f"{model} 不支持{labels[kind]}。\n"
+                    f"请断开 {labels[kind]}的连线，或把 model 换成支持它的变体。"
+                )
+            if counts[kind] > cap:
+                raise XHCYError(
+                    f"{model} 最多支持 {cap} 个{labels[kind]}，你接了 {counts[kind]} 个。"
+                )
+
+        mixed_cap = limits.get("mixed_media")
+        total = sum(counts.values())
+        if mixed_cap is not None and total > mixed_cap:
+            raise XHCYError(
+                f"{model} 的参考素材合计最多 {mixed_cap} 个"
+                f"（图 {counts['image']} + 视频 {counts['video']} + 音频 {counts['audio']}"
+                f" = {total}）。请减少一些再提交。"
+            )
+
     def generate(self, prompt, model, api_key, resolution, duration, ratio,
                  max_poll_attempts, poll_interval, base_url=DEFAULT_BASE_URL, **kwargs):
         prompt = (prompt or "").strip()
         if not prompt:
             raise XHCYError("提示词（prompt）不能为空")
+
+        # 站点 prompt_max = 7000，超了会被上游拒，先在本地挡掉
+        if self.PROMPT_MAX_CHARS and len(prompt) > self.PROMPT_MAX_CHARS:
+            raise XHCYError(
+                "提示词太长：%d 字，上限 %d 字（站点 prompt_max）。\n"
+                "请精简后再提交。" % (len(prompt), self.PROMPT_MAX_CHARS)
+            )
 
         if self.VARIANT_MODELS and model not in self.VARIANT_MODELS:
             raise XHCYError(f"未知的模型：{model}")
@@ -570,6 +635,7 @@ class XHCYVideoBase:
         check_interrupt()
         reset_material_budget()
         content = self.build_content(prompt, kwargs)
+        self.validate_media_limits(model, content)
 
         client = XHCYClient(api_key, base_url)
         payload = {

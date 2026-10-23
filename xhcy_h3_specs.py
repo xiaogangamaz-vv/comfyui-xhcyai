@@ -52,22 +52,28 @@ MODES = {
     "MiniMax-H3-Lite": ["text", "first_last_frame", "reference"],
 }
 
-# 素材数量上限（站点给出）
+# 素材数量上限（逐项对齐站点 /api/video/models 返回的 limits，2026-10-23 核对）
 REFERENCE_LIMITS = {
     "MiniMax-H3": {
         "reference_images": 9,
         "reference_videos": 3,
-        "reference_audio": 3,
+        "reference_audios": 3,
         "mixed_media": 12,
     },
     "MiniMax-H3-Lite": {
         "reference_images": 9,
-        "reference_audio": 3,
+        # ⚠️ 站点给 Lite 的 limits 里**没有 reference_videos**——它不支持参考视频。
+        # 之前节点对 Lite 也开放了 video1~video3，一接就会被上游拒。
+        "reference_videos": 0,
+        "reference_audios": 3,
         # 该档的首尾帧工作流要求首尾都给，且音频必须搭配至少一张图
         "first_last_frame_pair_required": 1,
         "audio_requires_image": 1,
     },
 }
+
+# 站点 prompt_max（两个变体都是 7000）
+PROMPT_MAX_CHARS = 7000
 
 # 下拉候选的兜底值（正常路径由 XHCYVideoBase.all_resolutions() 取并集）
 RESOLUTIONS = ["480P", "768P", "1080P", "2K"]

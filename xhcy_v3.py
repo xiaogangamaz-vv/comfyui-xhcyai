@@ -231,6 +231,29 @@ def as_v3_node(cls, node_id: str | None = None, display_name: str | None = None)
     _XHCYV3Adapter.RETURN_NAMES = tuple(return_names)
     _XHCYV3Adapter.CATEGORY = category
     _XHCYV3Adapter.OUTPUT_NODE = is_output_node
+    # 把原节点的规格常量也透传出去，方便外部（测试、审查脚本、其他插件）
+    # 直接读「这个节点支持什么」。运行时并不依赖这些——execute 用的是原类
+    # 实例，self 上的属性访问本来就正常。
+    for _attr in (
+        "VARIANT_MODELS",
+        "RESOLUTION_LIMITS",
+        "RATIO_LIMITS",
+        "DURATION_LIMITS",
+        "MEDIA_LIMITS",
+        "PROMPT_MAX_CHARS",
+        "DEFAULT_MODEL",
+        "DEFAULT_RESOLUTION",
+        "DEFAULT_DURATION",
+        "DEFAULT_RATIO",
+        "RESOLUTIONS",
+        "RATIOS",
+        "MODEL_SIZES",
+        "SIZE_MAP",
+        "QUALITIES",
+        "MAX_REFERENCES",
+    ):
+        if hasattr(cls, _attr):
+            setattr(_XHCYV3Adapter, _attr, getattr(cls, _attr))
     # 把旧节点的执行方法也挂到适配类上，外部代码（测试、其他插件）仍可
     # 像以前一样 ``node = cls(); node.generate(...)`` 这样调用。
     # ⚠️ 必须建一个**原类的实例**来执行：原类方法里的 self 语义（属性访问、
