@@ -168,6 +168,15 @@ class XHCYImageBase:
     RESOLUTIONS: list[str] = ["1k", "2k", "4k"]
     SIZE_MAP: dict[tuple[str, str], str] = {}
     RESOLUTION_LIMITS: dict[str, list[str]] = {}
+    # 按模型精确声明「哪些 (画幅, 分辨率) 真的能用」以及对应像素。
+    #
+    # 为什么需要它：站点的尺寸白名单是**逐模型**的，同一个家族里有的变体只认
+    # 一个尺寸、有的变体认八种。只用 SIZE_MAP 一张全量表，会让用户选到某个
+    # 变体根本不接受的组合，撞上 size_not_supported。
+    #
+    # 结构：{模型名: {(画幅, 分辨率): "宽x高"}}
+    # 模型不在表里时退回 SIZE_MAP（视作不限制）。
+    MODEL_SIZES: dict[str, dict[tuple[str, str], str]] = {}
     DEFAULT_MODEL = ""
     DEFAULT_SIZE = "1024x1024"
     DEFAULT_RATIO = "1:1"
@@ -275,11 +284,11 @@ class XHCYImageBase:
         inputs: dict = {}
         if not cls.FIXED_SIZE:
             inputs["aspect_ratio"] = (
-                list(cls.RATIOS),
+                cls.ratio_choices(),
                 {"default": cls.DEFAULT_RATIO, "tooltip": cls.RATIO_TOOLTIP},
             )
             inputs[cls.SIZE_FIELD] = (
-                list(cls.RESOLUTIONS),
+                cls.resolution_choices(),
                 {"default": cls.DEFAULT_RESOLUTION, "tooltip": cls.RESOLUTION_TOOLTIP},
             )
         if cls.REPLY_TYPES:
@@ -298,17 +307,71 @@ class XHCYImageBase:
     def resolve_size(cls, aspect_ratio: str, resolution: str, model: str | None = None) -> str:
         """(画幅, 分辨率) -> 接口要求的像素尺寸。
 
-        model 只用于让子类按变体做更细的限制（例如 gpt-image-2 只吃 1024x1024），
-        基类不区分变体、会忽略它。
+        model 用于按变体做精确限制：站点对同一家族里的不同变体给出的尺寸
+        白名单并不一样（有的只认 1024x1024，有的认八种）。子类把逐模型的表
+        放在 MODEL_SIZES 里，这里统一校验。
         """
         if aspect_ratio == "auto":
             return "auto"
+
+        # 该模型单独声明过尺寸表 -> 只认表里的组合
+        table = cls.MODEL_SIZES.get(model) if model else None
+        if table:
+            size = table.get((aspect_ratio, resolution))
+            if size is None:
+                supported = [
+                    f"{r} @ {s}" for (r, s) in sorted(table)
+                ]
+                raise XHCYError(
+                    f"{model} 不支持「{aspect_ratio} + {resolution}」。\n"
+                    f"它在本站可用的组合只有：{'、'.join(supported)}\n"
+                    f"（选其它变体，或改成上面列出的组合）"
+                )
+            return size
+
         if not cls.SIZE_MAP:
             return "auto"
         size = cls.SIZE_MAP.get((aspect_ratio, resolution))
         if size is None:
             raise XHCYError(f"不支持的画幅组合：{aspect_ratio} × {resolution}")
         return size
+
+    @classmethod
+    def ratio_choices(cls) -> list[str]:
+        """画幅下拉的候选：把所有模型声明过的画幅取并集。
+
+        ComfyUI 的下拉不能跟着 model 联动，所以这里给全量并集，
+        选了当前模型不支持的时候由 resolve_size 给出明确提示。
+        """
+        seen: list[str] = []
+        source = cls.RATIOS
+        if cls.MODEL_SIZES:
+            for table in cls.MODEL_SIZES.values():
+                for (ratio, _res) in table:
+                    if ratio not in seen:
+                        seen.append(ratio)
+        if seen:
+            # 保留 auto 在最前面（如果原本有）
+            if "auto" in source and "auto" not in seen:
+                seen.insert(0, "auto")
+            elif "auto" in seen:
+                seen.remove("auto")
+                seen.insert(0, "auto")
+            return seen
+        return list(source)
+
+    @classmethod
+    def resolution_choices(cls) -> list[str]:
+        """分辨率下拉的候选：把所有模型声明过的档位取并集。"""
+        seen: list[str] = []
+        if cls.MODEL_SIZES:
+            for table in cls.MODEL_SIZES.values():
+                for (_ratio, res) in table:
+                    if res not in seen:
+                        seen.append(res)
+        if seen:
+            return seen
+        return list(cls.RESOLUTIONS)
 
     @classmethod
     def allowed_resolutions(cls, model: str) -> list[str]:

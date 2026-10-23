@@ -100,8 +100,12 @@ class XHCYGPTImage2(XHCYImageBase):
     VARIANT_MODELS = ["gpt-image-2", "gpt-image-2-all", "gpt-image-2-vip"]
 
     MODEL_TOOLTIP = (
-        "同一家族的变体。gpt-image-2 只支持 1:1 + 1K（本站尺寸白名单）；"
-        "gpt-image-2-all / gpt-image-2-vip 支持 1K / 2K / 4K 与任意画幅。"
+        "同一家族的变体，尺寸能力差别很大：\n"
+        "· gpt-image-2 —— 站点尺寸白名单只有 1024×1024（1:1 + 1K），选别的会被拒\n"
+        "· gpt-image-2-all —— 上游**不接受 size 参数**，只能把画幅设为 auto，"
+        "由模型自己决定尺寸\n"
+        "· gpt-image-2-vip —— 站点不校验尺寸，十四种画幅 × 1K/2K/4K 全开\n"
+        "要自由画幅请用 -vip。"
     )
 
     RATIOS = _RATIOS
@@ -109,9 +113,19 @@ class XHCYGPTImage2(XHCYImageBase):
     SIZE_MAP = _SIZE_MAP
     RESOLUTION_LIMITS = _RESOLUTION_LIMITS
 
+    # 站点对 gpt-image-2 做了严格白名单：只认 1024x1024。
+    # gpt-image-2-all 由 resolve_size 单独拦（上游拒收 size，只能 auto）。
+    # gpt-image-2-vip 走直通、不校验，给全量表。
+    MODEL_SIZES = {
+        "gpt-image-2": {
+            ("1:1", "1k"): "1024x1024",
+        },
+        "gpt-image-2-vip": dict(_SIZE_MAP),
+    }
+
     QUALITIES = []          # 本站未给出该家族的画质档，不显示
 
-    DEFAULT_MODEL = "gpt-image-2-all"
+    DEFAULT_MODEL = "gpt-image-2-vip"
     DEFAULT_RATIO = "1:1"
     DEFAULT_RESOLUTION = "1k"
     NODE_ID = "xhcy_gpt_image_2"
@@ -124,16 +138,16 @@ class XHCYGPTImage2(XHCYImageBase):
 
     @classmethod
     def resolve_size(cls, aspect_ratio: str, resolution: str, model: str | None = None) -> str:
-        # 无后缀的 gpt-image-2 是站点定价模型，站点对它做了尺寸白名单：
-        # 只接受 1024x1024。选到别的比例时直接讲清楚，别让它去撞
-        # size_not_supported。
-        if model == "gpt-image-2" and aspect_ratio not in ("auto", "1:1"):
-            raise XHCYError(
-                "gpt-image-2 在本站只接受 1024×1024（即 1:1 + 1K），"
-                f"你选的是 {aspect_ratio}。"
-                "需要其它画幅或更高分辨率，请把 model 换成 gpt-image-2-all "
-                "或 gpt-image-2-vip。"
-            )
+        # -all 的上游拒收 size 字段，站点把它标记为直通模型。这里只能返回
+        # "auto"（基类据此不往请求体里塞 size），选具体画幅反而会失败。
+        if model == "gpt-image-2-all":
+            if aspect_ratio != "auto":
+                raise XHCYError(
+                    "gpt-image-2-all 的上游不接受 size 参数，只能由模型自己决定尺寸。\n"
+                    f"请把画幅改成 auto（你现在选的是 {aspect_ratio}）。\n"
+                    "需要指定画幅，请换 gpt-image-2-vip。"
+                )
+            return "auto"
         return super().resolve_size(aspect_ratio, resolution, model)
 
 

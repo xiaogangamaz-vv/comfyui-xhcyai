@@ -86,10 +86,32 @@ class XHCYGPTImage25(XHCYImageBase):
     """GPT Image 2.5 family — text-to-image and multi-reference in one node."""
 
     VARIANT_MODELS = ["gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]
+
+    MODEL_TOOLTIP = (
+        "同一家族的变体，尺寸能力差别很大：\n"
+        "· gpt-image-2.5 —— 站点尺寸白名单只放了 1:1@1K（1024×1024）"
+        "和 9:16@1K（720×1280）两种，选别的会被拒\n"
+        "· gpt-image-2.5-flare —— 站点不校验尺寸，十四种画幅 × 1K/2K/4K 全开\n"
+        "· gpt-image-2.5-sunburst —— 同上，另外画质可到 xhigh / max\n"
+        "要自由画幅就选 -flare 或 -sunburst。"
+    )
+
     RATIOS = _RATIOS
     RESOLUTIONS = _RESOLUTIONS
     SIZE_MAP = _SIZE_MAP
     RESOLUTION_LIMITS = _RESOLUTION_LIMITS
+
+    # 站点对 gpt-image-2.5 做了严格白名单（ImageSizeRatios），只有两种像素框。
+    # 两个高级变体走直通、不校验，给全量表。
+    MODEL_SIZES = {
+        "gpt-image-2.5": {
+            ("1:1", "1k"): "1024x1024",
+            ("9:16", "1k"): "720x1280",
+        },
+        "gpt-image-2.5-flare": dict(_SIZE_MAP),
+        "gpt-image-2.5-sunburst": dict(_SIZE_MAP),
+    }
+
     QUALITIES = _QUALITIES
     DEFAULT_MODEL = "gpt-image-2.5"
     DEFAULT_RATIO = "1:1"
