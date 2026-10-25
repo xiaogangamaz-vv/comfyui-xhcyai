@@ -113,7 +113,8 @@ class XHCYGPTImage25(XHCYImageBase):
     }
 
     QUALITIES = _QUALITIES
-    DEFAULT_MODEL = "gpt-image-2.5"
+    # 默认选 -flare：基版只认 2 种尺寸，-flare 是 14 画幅 × 1K/2K/4K 全开
+    DEFAULT_MODEL = "gpt-image-2.5-flare"
     DEFAULT_RATIO = "1:1"
     DEFAULT_RESOLUTION = "1k"
     NODE_ID = "xhcy_gpt_image_25"

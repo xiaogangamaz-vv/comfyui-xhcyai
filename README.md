@@ -49,10 +49,43 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点合集。
 >
 > **提示词上限 7000 字**（站点 `prompt_max`），超出会在提交前拦下。
 
-### 图像：尺寸
+### 图像：尺寸（2026-10-25 逐个打真接口实测）
 
-详细对照见下方「尺寸能力对照表」。
-`nano-banana` / `gpt-image` 家族已按站点白名单逐模型限定；
+**想要非方图 / 大图，关键是选对变体**——同家族不同变体的能力差别很大：
+
+| 变体 | 实测可用 | 说明 |
+| --- | --- | --- |
+| `gemini-nano-banana-2.1` | ✅ 1:1 / 2:3 / 3:2 / 16:9 / 9:16 | 1:1 可到 4K，其它比例走 4K 档。**banana 家族只有它能出非方图** |
+| `nano-banana-2` | ✅ 只有 1:1 @ 1K | 站点白名单锁死，实测 1280×720 返回 `size_not_supported` |
+| `nano-banana-pro` | ✅ 只有 1:1 @ 1K | 同上 |
+| ~~`nano-banana-fast`~~ | ❌ 已移除 | 实测 HTTP 503「no available channel」，站点没有可用渠道 |
+| ~~`nano-banana`~~ | ❌ 已移除 | 实测 HTTP 400「upstream provider rejected」 |
+| `gpt-image-2-vip` | ✅ 14 画幅 × 1K / 2K / 4K | 实测 3840×2160 出图 |
+| `gpt-image-2.5-flare` | ✅ 14 画幅 × 1K / 2K / 4K | 实测 2048×2048 出图 |
+| `gpt-image-2.5-sunburst` | ✅ 同上，画质可到 xhigh / max | |
+| `gpt-image-2.5`（基版） | ✅ 只有 1:1 与 9:16 @1k | 实测 1280×720 被拒 |
+| `gpt-image-2` | ✅ 只有 1:1 @ 1K | |
+| `gpt-image-2-all` | ⚠️ 只能 auto | 上游不接受 size 参数 |
+
+> **banana 家族没有 2K**：实测 `2048×2048` 直接返回 `size_not_supported`，
+> 只有 1K 和 4K 两档。需要 2K 请用 GPT 节点（选 `-flare` / `-sunburst` / `-vip`）。
+
+**默认模型已经调成「开箱就能出多画幅」的那个**：
+
+| 节点 | 默认变体 | 为什么 |
+| --- | --- | --- |
+| XHCY Nano Banana | `gemini-nano-banana-2.1` | 唯一支持五种画幅 + 4K |
+| XHCY GPT Image 2.5 | `gpt-image-2.5-flare` | 14 画幅 × 1K/2K/4K 全开 |
+| XHCY GPT Image 2 | `gpt-image-2-vip` | 同上 |
+
+选错变体时，节点会在发请求前拦下，并**直接告诉你换哪个**：
+
+```
+nano-banana-2 不支持「16:9 + 1K」。
+它在本站可用的组合只有：1:1 @ 1K
+想用「16:9 + 1K」，请把 model 换成：gemini-nano-banana-2.1
+```
+
 `seedream` 走 apilio 渠道（站点不校验尺寸），保持已验证的 1K / 1.5K / 2K。
 
 ### 文本：模型清单
