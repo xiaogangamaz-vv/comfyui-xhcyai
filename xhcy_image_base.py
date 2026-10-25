@@ -159,6 +159,9 @@ class XHCYImageBase:
     VARIANT_MODELS: list[str] = []
     # 节点上出现几个参考图入口；子类可按模型上限调小（例如 seedream 只吃 10 张）
     MAX_REFERENCES = MAX_REFERENCE_IMAGES
+    # 选的组合当前变体做不到时，是否自动换成本家族里能做到的变体。
+    # 开着是为了不让工作流卡在报错上；关掉就退回「直接报错」的严格模式。
+    AUTO_MODEL_FALLBACK = True
     SIZES: list[str] = ["auto", "1024x1024", "1536x1024", "1024x1536"]
     QUALITIES: list[str] = ["auto", "low", "medium", "high"]
     RATIOS: list[str] = [
@@ -437,16 +440,45 @@ class XHCYImageBase:
         resolution = kwargs.get(self.SIZE_FIELD) or resolution or self.DEFAULT_RESOLUTION
         aspect_ratio = aspect_ratio or self.DEFAULT_RATIO
 
+        self._fallback_note = ""
+
         if self.FIXED_SIZE:
             # 该模型只有一个固定尺寸（例如 nano-banana 只吃 1024x1024）
             size = self.FIXED_SIZE
         else:
-            allowed = self.allowed_resolutions(model)
-            if aspect_ratio != "auto" and resolution not in allowed:
-                raise XHCYError(
-                    f"{model} 不支持 {resolution} 分辨率；可选：{'、'.join(allowed)}"
+            def _resolve_for(name: str) -> str:
+                allowed = self.allowed_resolutions(name)
+                if aspect_ratio != "auto" and resolution not in allowed:
+                    raise XHCYError(
+                        f"{name} 不支持 {resolution} 分辨率；可选：{'、'.join(allowed)}"
+                    )
+                return self.resolve_size(aspect_ratio, resolution, name)
+
+            try:
+                size = _resolve_for(model)
+            except XHCYError:
+                # 自动回退：同家族里换一个真能出这个组合的变体。
+                #
+                # 目的是不让工作流卡死。model 一旦固定成某个变体，换画幅或
+                # 档位是很自然的事；直接报错就得手动改下拉，批量跑尤其难受。
+                # 这里自动挑一个支持的变体，并把「换成了谁」写进输出，保持透明。
+                fallback = None
+                if self.AUTO_MODEL_FALLBACK:
+                    candidates = [
+                        m
+                        for m in self.suggest_models(aspect_ratio, resolution)
+                        if m in (self.VARIANT_MODELS or [])
+                    ]
+                    if candidates:
+                        fallback = candidates[0]
+                if fallback is None:
+                    raise
+                size = _resolve_for(fallback)
+                self._fallback_note = (
+                    f"已自动把 model 从 {model} 换成 {fallback}"
+                    f"（{model} 不支持 {aspect_ratio} + {resolution}）"
                 )
-            size = self.resolve_size(aspect_ratio, resolution, model)
+                model = fallback
 
         attempts = _int_param(max_poll_attempts, "最大查询次数", 1, 600)
         interval = _int_param(poll_interval, "查询间隔", 1, 60)
@@ -495,6 +527,7 @@ class XHCYImageBase:
             else f"画幅：{aspect_ratio} @ {resolution}（{size}）"
         )
         task_id = extract_task_id(result) or extract_task_id(first) or "-"
+        note = getattr(self, "_fallback_note", "")
         summary = (
             f"XHCY 生成成功\n"
             f"模式：{mode_text}\n"
@@ -502,8 +535,11 @@ class XHCYImageBase:
             f"{size_text}\n"
             f"任务：{task_id}\n"
             f"张数：{len(paths)}\n"
-            f"文件：\n" + "\n".join(paths)
+            + (f"提示：{note}\n" if note else "")
+            + f"文件：\n" + "\n".join(paths)
         )
+        if note:
+            print(f"[XHCY] {note}")
         return (torch.stack(tensors), summary, "\n".join(paths))
 
     # ------------------------------------------------------------------ #
