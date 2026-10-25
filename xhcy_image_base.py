@@ -319,13 +319,18 @@ class XHCYImageBase:
         if table:
             size = table.get((aspect_ratio, resolution))
             if size is None:
-                supported = [
-                    f"{r} @ {s}" for (r, s) in sorted(table)
-                ]
+                supported = [f"{r} @ {s}" for (r, s) in sorted(table)]
+                # 直接算出「换哪个变体就能用」，别让人自己猜
+                alternatives = cls.suggest_models(aspect_ratio, resolution)
+                tip = ""
+                if alternatives:
+                    tip = (
+                        f"\n想用「{aspect_ratio} + {resolution}」，"
+                        f"请把 model 换成：{' 或 '.join(alternatives)}"
+                    )
                 raise XHCYError(
                     f"{model} 不支持「{aspect_ratio} + {resolution}」。\n"
-                    f"它在本站可用的组合只有：{'、'.join(supported)}\n"
-                    f"（选其它变体，或改成上面列出的组合）"
+                    f"它在本站可用的组合只有：{'、'.join(supported)}{tip}"
                 )
             return size
 
@@ -335,6 +340,15 @@ class XHCYImageBase:
         if size is None:
             raise XHCYError(f"不支持的画幅组合：{aspect_ratio} × {resolution}")
         return size
+
+    @classmethod
+    def suggest_models(cls, aspect_ratio: str, resolution: str) -> list[str]:
+        """哪些变体支持这个 (画幅, 档位)。用于报错时直接给出可选项。"""
+        hits: list[str] = []
+        for model, table in (cls.MODEL_SIZES or {}).items():
+            if (aspect_ratio, resolution) in table:
+                hits.append(model)
+        return hits
 
     @classmethod
     def ratio_choices(cls) -> list[str]:

@@ -65,16 +65,10 @@ _GEMINI_SIZES = {
     ("9:16", "4K"): "1536x2752",
 }
 
-# nano-banana-fast / nano-banana 是直通模型，站点不校验尺寸。
-# 这里按同族的已验证组合给，避免给出没有依据的选项。
-_PASSTHROUGH_SIZES = dict(_GEMINI_SIZES)
-
 _MODEL_SIZES = {
     "nano-banana-2": _ONLY_SQUARE,
     "nano-banana-pro": _ONLY_SQUARE,
     "gemini-nano-banana-2.1": _GEMINI_SIZES,
-    "nano-banana-fast": _PASSTHROUGH_SIZES,
-    "nano-banana": _PASSTHROUGH_SIZES,
 }
 
 # 兼容基类的老字段：任一变体支持的最大像素集合
@@ -84,22 +78,24 @@ _SIZE_MAP = dict(_GEMINI_SIZES)
 class XHCYNanoBanana(XHCYImageBase):
     """Nano Banana family — text-to-image and multi-reference in one node."""
 
+    # 只保留 2026-10-25 实测真的能出图的三个变体。
+    # 已移除：
+    #   nano-banana-fast —— HTTP 503「no available channel」，站点没有可用渠道
+    #   nano-banana      —— HTTP 400「upstream provider rejected the request」
     VARIANT_MODELS = [
-        "nano-banana-2",
         "gemini-nano-banana-2.1",
+        "nano-banana-2",
         "nano-banana-pro",
-        "nano-banana-fast",
-        # 站点把它声明为「直通、未公开」，尺寸不校验；能力按同族处理。
-        "nano-banana",
     ]
 
     MODEL_TOOLTIP = (
-        "同一家族的变体，尺寸能力差别很大：\n"
-        "· nano-banana-2 / nano-banana-pro —— 只支持 1:1 + 1K（1024×1024）\n"
-        "· gemini-nano-banana-2.1 —— 支持 1:1 / 2:3 / 3:2 / 16:9 / 9:16，"
-        "1:1 可到 4K，其它比例走 4K 档\n"
-        "· nano-banana-fast / nano-banana —— 直通上游，按同族八种组合给\n"
-        "想要更多画幅优先选 gemini-nano-banana-2.1。"
+        "尺寸能力差别很大（2026-10-25 逐个实测确认）：\n"
+        "· gemini-nano-banana-2.1 —— 五种画幅 1:1 / 2:3 / 3:2 / 16:9 / 9:16，"
+        "1:1 可到 4K，其它比例走 4K 档。想要非方图就选它\n"
+        "· nano-banana-2 —— 只有 1:1 @ 1K（1024×1024），站点尺寸白名单锁死\n"
+        "· nano-banana-pro —— 同上，只有方图\n"
+        "本家族没有 2K：实测 2048×2048 直接返回 size_not_supported。"
+        "需要 2K 请改用 XHCY GPT Image 2.5 节点（选 -flare 或 -sunburst）。"
     )
 
     RATIOS = _ASPECT_RATIOS
@@ -132,7 +128,8 @@ class XHCYNanoBanana(XHCYImageBase):
 
     RETURN_NAMES = ("image", "response_text", "local_image_paths")
 
-    DEFAULT_MODEL = "nano-banana-2"
+    # 默认选 gemini：这是家族里唯一实测能出 2:3 / 3:2 / 16:9 / 9:16 和 4K 的变体
+    DEFAULT_MODEL = "gemini-nano-banana-2.1"
     NODE_ID = "xhcy_nano_banana"
     OUTPUT_PREFIX = "xhcy_nano_banana"
     CATEGORY = "XHCY/Image"
