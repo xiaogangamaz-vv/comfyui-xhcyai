@@ -42,6 +42,30 @@ _RATIOS = [
 
 _RESOLUTIONS = ["1k", "2k", "4k"]
 
+# 站点 2026-10-25 的 image-contract 版本：gpt-image-2 与 -vip 改用 Gemini 的
+# 10 个比例框（代码里叫 geminiAspectBoxes，全部是 1K 档）。
+# 原表里的 1280x720 / 2048x2048 等已不在白名单内，会被拒。
+_GEMINI_10_BOXES = {
+    ("1:1", "1k"): "1024x1024",
+    ("2:3", "1k"): "848x1264",
+    ("3:2", "1k"): "1264x848",
+    ("3:4", "1k"): "896x1200",
+    ("4:3", "1k"): "1200x896",
+    ("4:5", "1k"): "928x1152",
+    ("5:4", "1k"): "1152x928",
+    ("9:16", "1k"): "768x1344",
+    ("16:9", "1k"): "1344x768",
+    ("21:9", "1k"): "1536x672",
+}
+
+_MODEL_SIZES = {
+    "gpt-image-2": _GEMINI_10_BOXES,
+    # vip 的白名单也换成了这套框，但它的上游仍是 GPT 系，只认 1280x720 这类
+    # GPT 尺寸——实测 1344x768 会被上游拒（upstream_request_rejected）。
+    # 这里按站点白名单配，实际可用性等站点修正后再验证。
+    "gpt-image-2-vip": _GEMINI_10_BOXES,
+}
+
 # 无后缀的 gpt-image-2 是站点定价模型，只开放 1K
 _RESOLUTION_LIMITS = {
     "gpt-image-2": ["1k"],
@@ -111,17 +135,11 @@ class XHCYGPTImage2(XHCYImageBase):
     RATIOS = _RATIOS
     RESOLUTIONS = _RESOLUTIONS
     SIZE_MAP = _SIZE_MAP
+    # 站点 2026-10-25 新契约：逐模型固定框，优先于 SIZE_MAP
+    MODEL_SIZES = _MODEL_SIZES
     RESOLUTION_LIMITS = _RESOLUTION_LIMITS
 
-    # 站点对 gpt-image-2 做了严格白名单：只认 1024x1024。
     # gpt-image-2-all 由 resolve_size 单独拦（上游拒收 size，只能 auto）。
-    # gpt-image-2-vip 走直通、不校验，给全量表。
-    MODEL_SIZES = {
-        "gpt-image-2": {
-            ("1:1", "1k"): "1024x1024",
-        },
-        "gpt-image-2-vip": dict(_SIZE_MAP),
-    }
 
     QUALITIES = []          # 本站未给出该家族的画质档，不显示
 
