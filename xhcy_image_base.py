@@ -162,6 +162,10 @@ class XHCYImageBase:
     # 选的组合当前变体做不到时，是否自动换成本家族里能做到的变体。
     # 开着是为了不让工作流卡在报错上；关掉就退回「直接报错」的严格模式。
     AUTO_MODEL_FALLBACK = True
+    # 哪些变体用站点的「比例 + 档位」形式（aspect_ratio + image_size）
+    # 而不是像素框（size）。这些变体因此能出 2K / 4K，不受 10 个 1K 框限制。
+    # 站点 2026-10-26 实测：2:3@2K、9:16@2K、16:9@4K 均 200 出图。
+    ASPECT_PARAM_MODELS: list[str] = []
     SIZES: list[str] = ["auto", "1024x1024", "1536x1024", "1024x1536"]
     QUALITIES: list[str] = ["auto", "low", "medium", "high"]
     RATIOS: list[str] = [
@@ -317,6 +321,11 @@ class XHCYImageBase:
         if aspect_ratio == "auto":
             return "auto"
 
+        # 用「比例 + 档位」形式的变体不查像素表——站点按比例换算，
+        # 档位就是 1K / 2K / 4K。返回一个说明串只用于日志与摘要。
+        if model and model in cls.ASPECT_PARAM_MODELS:
+            return f"{aspect_ratio}@{resolution}"
+
         # 该模型单独声明过尺寸表 -> 只认表里的组合
         table = cls.MODEL_SIZES.get(model) if model else None
         if table:
@@ -350,6 +359,11 @@ class XHCYImageBase:
         hits: list[str] = []
         for model, table in (cls.MODEL_SIZES or {}).items():
             if (aspect_ratio, resolution) in table:
+                hits.append(model)
+        # 走「比例 + 档位」形式的变体不查像素表：只要档位合法就算支持。
+        # 少了这段，回退会找不到候选（2026-10-26 踩到）。
+        for model in (cls.ASPECT_PARAM_MODELS or []):
+            if model not in hits and str(resolution).upper() in ("1K", "2K", "4K"):
                 hits.append(model)
         return hits
 
@@ -386,12 +400,23 @@ class XHCYImageBase:
                 for (_ratio, res) in table:
                     if res not in seen:
                         seen.append(res)
+        # 走「比例 + 档位」的变体支持 1K/2K/4K，但像素表里只有 1K 框，
+        # 少了这段档位下拉会缺 2K（2026-10-26 踩到）。
+        if cls.ASPECT_PARAM_MODELS:
+            for tier in ("1K", "2K", "4K"):
+                if tier not in seen:
+                    seen.append(tier)
+            # 统一成 1K → 2K → 4K 的显示顺序，别让 2K 跑到最后
+            order = {"1K": 0, "2K": 1, "4K": 2}
+            seen.sort(key=lambda t: order.get(t.upper(), 99))
         if seen:
             return seen
         return list(cls.RESOLUTIONS)
 
     @classmethod
     def allowed_resolutions(cls, model: str) -> list[str]:
+        if model and model in cls.ASPECT_PARAM_MODELS:
+            return ["1K", "2K", "4K"]
         return cls.RESOLUTION_LIMITS.get(model, cls.RESOLUTIONS)
 
     @classmethod
@@ -494,7 +519,15 @@ class XHCYImageBase:
             "n": 1,
             "response_format": "url",
         }
-        if size != "auto":
+        # 站点 2026-10-26 起，Gemini 家族（nano-banana-2 / -pro /
+        # gemini-nano-banana-2.1）接受「比例 + 档位」形式：
+        #     {"aspect_ratio": "2:3", "image_size": "2K"}
+        # 这种形式能出 2K / 4K；而只传 size（像素框）时会被钉在 10 个 1K 框上。
+        # 站点侧实测：2:3@2K、9:16@2K、16:9@4K 全部 200 出图。
+        if model in self.ASPECT_PARAM_MODELS:
+            payload["aspect_ratio"] = aspect_ratio
+            payload["image_size"] = str(resolution).upper()
+        elif size != "auto":
             payload["size"] = size
         if quality and quality != "auto":
             payload["quality"] = quality

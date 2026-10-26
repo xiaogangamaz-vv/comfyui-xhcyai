@@ -26,6 +26,23 @@ _RATIOS = [
 
 _RESOLUTIONS = ["1k", "2k", "4k"]
 
+# 站点 2026-10-25 的 image-contract 版本：
+#   基版 gpt-image-2.5 只接受 7 个固定框（混合了 Gemini 框与 1280x720）
+#   -flare / -sunburst 是 SizeRange（只查像素范围，不限具体框），保持全表
+_GPT25_BASE_SIZES = {
+    ("1:1", "1k"): "1024x1024",
+    ("9:16", "1k"): "720x1280",
+    ("16:9", "1k"): "1280x720",
+    ("2:3", "1k"): "848x1264",
+    ("3:2", "1k"): "1264x848",
+    ("3:4", "1k"): "896x1200",
+    ("4:3", "1k"): "1200x896",
+}
+
+_MODEL_SIZES = {
+    "gpt-image-2.5": _GPT25_BASE_SIZES,
+}
+
 # Base variant is documented as 1K-only; the two premium variants go to 4K.
 _RESOLUTION_LIMITS = {
     "gpt-image-2.5": ["1k"],
@@ -99,18 +116,10 @@ class XHCYGPTImage25(XHCYImageBase):
     RATIOS = _RATIOS
     RESOLUTIONS = _RESOLUTIONS
     SIZE_MAP = _SIZE_MAP
+    # 站点 2026-10-25 新契约：逐模型固定框，优先于 SIZE_MAP
+    # （基版 7 个框；-flare / -sunburst 走 SizeRange，仍用全表）
+    MODEL_SIZES = _MODEL_SIZES
     RESOLUTION_LIMITS = _RESOLUTION_LIMITS
-
-    # 站点对 gpt-image-2.5 做了严格白名单（ImageSizeRatios），只有两种像素框。
-    # 两个高级变体走直通、不校验，给全量表。
-    MODEL_SIZES = {
-        "gpt-image-2.5": {
-            ("1:1", "1k"): "1024x1024",
-            ("9:16", "1k"): "720x1280",
-        },
-        "gpt-image-2.5-flare": dict(_SIZE_MAP),
-        "gpt-image-2.5-sunburst": dict(_SIZE_MAP),
-    }
 
     QUALITIES = _QUALITIES
     # 默认选 -flare：基版只认 2 种尺寸，-flare 是 14 画幅 × 1K/2K/4K 全开
