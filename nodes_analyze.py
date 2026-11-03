@@ -41,6 +41,7 @@ try:
     from .xhcy_frames import video_to_frames
     from .xhcy_image_base import tensor_to_data_uri
     from .xhcy_v3 import as_v3_node
+    from .xhcy_credentials import resolve_credentials
 except ImportError:  # allow running this file standalone for debugging
     from xhcy_client import (  # type: ignore
         DEFAULT_BASE_URL,
@@ -67,8 +68,11 @@ except ImportError:  # allow running this file standalone for debugging
 #           deepseek-v4.1-flash（渠道不可用）、
 #           MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat（请求失败）
 # 按「下拉里只放真正能用的选项」的原则，这里只列实测通过的。
+# ⚠️ 2026-11-02 复测（本机直连 ai.xhcyai.org）：
+#   gemini-3-flash 已经从站点 /v1/models 下线，选了直接报「未知的模型」，
+#   所以默认换成 gemini-3.8-flash（实测返回正常）。
 MODEL_CAPABILITY = {
-    "gemini-3-flash": "vision",
+    "gemini-3.8-flash": "vision",
     "claude-fable-5": "vision",
     "claude-fable-5-1": "vision",
     "claude-opus-5-5": "vision",
@@ -76,7 +80,7 @@ MODEL_CAPABILITY = {
 }
 
 MODEL_LIST = list(MODEL_CAPABILITY.keys())
-DEFAULT_MODEL = "gemini-3-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 # 站点若临时不可用，可用这里的顺序做降级提示
 VISION_HINT = (
@@ -421,6 +425,7 @@ class XHCYAnalyze:
                 + pieces,
             }
 
+        api_key, base_url = resolve_credentials(api_key, base_url)
         client = XHCYClient(api_key, base_url)
         try:
             response = client.chat(payload)

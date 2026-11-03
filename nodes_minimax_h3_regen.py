@@ -33,6 +33,7 @@ try:
     from .xhcy_client import DEFAULT_BASE_URL, STATUS_FAILURE, XHCYClient, XHCYError, extract_status
     from .xhcy_client import extract_failure_reason, extract_task_id, extract_video_url
     from .xhcy_v3 import as_v3_node
+    from .xhcy_credentials import resolve_credentials
     from .xhcy_video_base import (
         MAX_VIDEO_BYTES,
         XHCYVideoBase,
@@ -45,6 +46,7 @@ except ImportError:  # allow running this file standalone for debugging
     from xhcy_client import DEFAULT_BASE_URL, STATUS_FAILURE, XHCYClient, XHCYError, extract_status  # type: ignore
     from xhcy_client import extract_failure_reason, extract_task_id, extract_video_url  # type: ignore
     from xhcy_v3 import as_v3_node  # type: ignore
+    from xhcy_credentials import resolve_credentials  # type: ignore
     from xhcy_video_base import (  # type: ignore
         MAX_VIDEO_BYTES,
         XHCYVideoBase,
@@ -210,6 +212,7 @@ class XHCYMiniMaxH3Regeneration(XHCYVideoBase):
 
         check_interrupt()
 
+        api_key, base_url = resolve_credentials(api_key, base_url)
         client = XHCYClient(api_key, base_url)
         first = client.submit_video_regeneration(payload)
         status = extract_status(first)

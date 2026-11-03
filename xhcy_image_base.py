@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
+import re
 import time
 import uuid
 
@@ -39,9 +41,11 @@ try:
         XHCYError,
         extract_failure_reason,
         extract_image_urls,
+        extract_inline_images,
         extract_status,
         extract_task_id,
     )
+    from .xhcy_credentials import resolve_credentials as _resolve_credentials
 except ImportError:  # allow running this file standalone for debugging
     from xhcy_client import (  # type: ignore
         DEFAULT_BASE_URL,
@@ -51,9 +55,11 @@ except ImportError:  # allow running this file standalone for debugging
         XHCYError,
         extract_failure_reason,
         extract_image_urls,
+        extract_inline_images,
         extract_status,
         extract_task_id,
     )
+    from xhcy_credentials import resolve_credentials as _resolve_credentials  # type: ignore
 
 
 # ---------------------------------------------------------------------- #
@@ -145,6 +151,33 @@ def tensor_to_data_uri(tensor: torch.Tensor) -> str:
             % (MAX_REFERENCE_BYTES / 1024 / 1024)
         )
     return "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+
+
+def payload_snippet(payload: dict, limit: int = 400) -> str:
+    """把服务端原始返回压成一行短文本，附在报错里。
+
+    没有这一段的时候，凡是「200 但没有图片也没有任务 ID」都会被压成同一句话，
+    线上出了事只能靠猜。base64 一律省略，避免把报错刷成几百 KB。
+    """
+    try:
+        text = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        text = str(payload)
+    marker = "base64,"
+    if marker in text:
+        text = text[: text.index(marker) + len(marker)] + "…<base64 已省略>"
+    # data[].b64_json 这类字段没有 data-URI 前缀，靠长度判断：真正的图片
+    # base64 一定很长，短字符串（模型名、task id）不会被误伤。
+    text = re.sub(r'"([A-Za-z0-9+/=]{200,})"', '"…<base64 已省略>"', text)
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return text or "（空响应）"
+
+
+def resolve_credentials(api_key, base_url) -> tuple[str, str]:
+    """兼容旧调用点：实现在 xhcy_credentials 里，图片/视频节点共用同一份。"""
+    return _resolve_credentials(api_key, base_url)
 
 
 class XHCYImageBase:
@@ -374,8 +407,13 @@ class XHCYImageBase:
         ComfyUI 的下拉不能跟着 model 联动，所以这里给全量并集，
         选了当前模型不支持的时候由 resolve_size 给出明确提示。
         """
+        # 先把类声明的画幅全放进去（否则 -flare 这类「只查像素范围、不限具体框」
+        # 的变体会被 MODEL_SIZES 收窄，下拉里看不到 21:9 / 2:1 等）。
         seen: list[str] = []
         source = cls.RATIOS
+        for ratio in source:
+            if ratio not in seen:
+                seen.append(ratio)
         if cls.MODEL_SIZES:
             for table in cls.MODEL_SIZES.values():
                 for (ratio, _res) in table:
@@ -400,16 +438,24 @@ class XHCYImageBase:
                 for (_ratio, res) in table:
                     if res not in seen:
                         seen.append(res)
+        # 逐模型的档位限制也要并进来：gpt-image-2.5 的 MODEL_SIZES 只登记了基版
+        # 的 1k 框，而 -flare / -sunburst 靠 RESOLUTION_LIMITS 声明 2k/4k。
+        # 少了这段，下拉里只剩 1k（2026-10-29 踩到）。
+        if cls.RESOLUTION_LIMITS:
+            for tiers in cls.RESOLUTION_LIMITS.values():
+                for tier in tiers:
+                    if tier not in seen:
+                        seen.append(tier)
         # 走「比例 + 档位」的变体支持 1K/2K/4K，但像素表里只有 1K 框，
         # 少了这段档位下拉会缺 2K（2026-10-26 踩到）。
         if cls.ASPECT_PARAM_MODELS:
             for tier in ("1K", "2K", "4K"):
                 if tier not in seen:
                     seen.append(tier)
-            # 统一成 1K → 2K → 4K 的显示顺序，别让 2K 跑到最后
+        if seen:
+            # 统一成 1K → 2K → 4K 的顺序（大小写混用也能排对）
             order = {"1K": 0, "2K": 1, "4K": 2}
             seen.sort(key=lambda t: order.get(t.upper(), 99))
-        if seen:
             return seen
         return list(cls.RESOLUTIONS)
 
@@ -457,6 +503,7 @@ class XHCYImageBase:
         prompt = (prompt or "").strip()
         if not prompt:
             raise XHCYError("提示词（prompt）不能为空")
+        api_key, base_url = resolve_credentials(api_key, base_url)
         if self.VARIANT_MODELS and model not in self.VARIANT_MODELS:
             raise XHCYError(f"未知的模型：{model}")
 
@@ -519,14 +566,15 @@ class XHCYImageBase:
             "n": 1,
             "response_format": "url",
         }
-        # 站点 2026-10-26 起，Gemini 家族（nano-banana-2 / -pro /
-        # gemini-nano-banana-2.1）接受「比例 + 档位」形式：
-        #     {"aspect_ratio": "2:3", "image_size": "2K"}
-        # 这种形式能出 2K / 4K；而只传 size（像素框）时会被钉在 10 个 1K 框上。
-        # 站点侧实测：2:3@2K、9:16@2K、16:9@4K 全部 200 出图。
+        # 走「比例 + 档位」的变体（站点侧的 Gemini 原生协议模型）：
+        # 直接发 aspect_ratio + image_size，站点会把它们写进上游的 imageConfig。
+        # 站点只接受公开集合里的值（1:1 3:2 2:3 3:4 4:3 4:5 5:4 9:16 16:9 21:9
+        # 与 1K / 2K / 4K），所以 auto 必须不传，否则会被 aspect_ratio_not_supported 拒。
         if model in self.ASPECT_PARAM_MODELS:
-            payload["aspect_ratio"] = aspect_ratio
-            payload["image_size"] = str(resolution).upper()
+            if aspect_ratio and aspect_ratio != "auto":
+                payload["aspect_ratio"] = aspect_ratio
+            if resolution:
+                payload["image_size"] = str(resolution).upper()
         elif size != "auto":
             payload["size"] = size
         if quality and quality != "auto":
@@ -539,16 +587,27 @@ class XHCYImageBase:
         result = self._resolve_result(client, first, attempts, interval)
 
         urls = extract_image_urls(result)
-        if not urls:
+        inline = extract_inline_images(result)
+        if not urls and not inline:
             raise XHCYError("生成完成，但返回里没有找到图片地址")
 
         tensors, paths = [], []
-        for index, url in enumerate(urls, start=1):
-            check_interrupt()
-            raw = client.download(url)
-            tensor, path = self._save_image(raw, index)
-            tensors.append(tensor)
-            paths.append(path)
+        if inline and not urls:
+            # ai.xhcyai.org 的 /v1/images/generations 即使请求里写了
+            # response_format=url，仍然把图片以 data[].b64_json 内嵌返回。
+            # 这类响应用户侧是成功的（也已经计费），直接解码保存，不再发下载请求。
+            for index, raw in enumerate(inline, start=1):
+                check_interrupt()
+                tensor, path = self._save_image(raw, index)
+                tensors.append(tensor)
+                paths.append(path)
+        else:
+            for index, url in enumerate(urls, start=1):
+                check_interrupt()
+                raw = client.download(url)
+                tensor, path = self._save_image(raw, index)
+                tensors.append(tensor)
+                paths.append(path)
 
         if len({tuple(t.shape) for t in tensors}) > 1:
             raise XHCYError("服务端返回了尺寸不一致的多张图片，无法合并成一批")
@@ -583,12 +642,23 @@ class XHCYImageBase:
     def _resolve_result(client: XHCYClient, first: dict, attempts: int, interval: int) -> dict:
         """Use a synchronous answer directly, otherwise poll by task id."""
         status = extract_status(first)
-        if extract_image_urls(first) and status not in STATUS_FAILURE:
+        # The gateway may link the result or embed it as base64; both mean "done".
+        if (extract_image_urls(first) or extract_inline_images(first)) and status not in STATUS_FAILURE:
             return first
 
         task_id = extract_task_id(first)
         if not task_id:
-            raise XHCYError("服务端既没直接返回图片，也没返回任务 ID")
+            hint = ""
+            if isinstance(first.get("data"), list) and not first.get("data"):
+                hint = (
+                    "服务端返回了空的图片列表（这一单在平台侧可能已经计费，"
+                    "需要去后台核对这笔请求是否要退款）；"
+                )
+            raise XHCYError(
+                "服务端既没直接返回图片，也没返回任务 ID。"
+                + hint
+                + "服务端原始返回：" + payload_snippet(first)
+            )
 
         last_status = status or "处理中"
         for _ in range(attempts):
@@ -602,7 +672,7 @@ class XHCYImageBase:
                 return current
             if status in STATUS_FAILURE:
                 raise XHCYError(f"生成失败：{extract_failure_reason(current) or '服务端未给出原因'}")
-            if not status and extract_image_urls(current):
+            if not status and (extract_image_urls(current) or extract_inline_images(current)):
                 return current
         raise XHCYError(f"等待超时，已查询 {attempts} 次，最后状态：{last_status}")
 

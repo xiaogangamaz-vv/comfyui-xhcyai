@@ -21,10 +21,12 @@ try:
     from .secure_config import (ConfigError, load_config, load_locked_billing,
                                 load_locked_service_origin, load_locked_service_profile)
     from .providers.secure_draw_client import SecureDrawClient
+    from .xhcy_client import DEFAULT_BASE_URL
 except ImportError:  # Allows direct test execution outside package loading.
     from secure_config import (ConfigError, load_config, load_locked_billing,
                                load_locked_service_origin, load_locked_service_profile)
     from providers.secure_draw_client import SecureDrawClient
+    from xhcy_client import DEFAULT_BASE_URL
 
 
 _BASE_RATIOS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]
@@ -35,7 +37,7 @@ _MAX_IMAGES = 16
 _MAX_EDGE = 2048
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _MAX_TOTAL_BYTES = 50 * 1024 * 1024
-_MODEL_LIST = ["nano-banana-fast", "nano-banana-2", "nano-banana-pro"]
+_MODEL_LIST = ["gemini-2.5-flash-image", "nano-banana-2", "nano-banana-pro", "gemini-nano-banana-2.1"]  # aligned with /v1/models; nano-banana-fast is gone upstream
 _IMAGE_SIZE_LIST = ["1K", "2K", "4K"]
 _REPLY_TYPE_LIST = ["json", "async", "stream"]
 _LOCKED_BILLING_DIGEST = "d698c42d480eea080d14577f792bcc21d7d81cce0f45c4b2a4d1f6f23007bde8"
@@ -532,84 +534,27 @@ class ComfyuiXinghuoNanoBanana:
 
     def generate(self, prompt, model, api_key, aspect_ratio, image_size, reply_type,
                  max_poll_attempts, poll_interval, **kwargs):
-        prompt = prompt.strip()
-        if not prompt:
-            raise ValueError("prompt 不能为空")
-        config = _provider_config()
-        api_key = api_key.strip() or config.get("api_key", "").strip()
-        if not api_key:
-            raise ValueError("加密配置中的 API Key 为空")
-        if model not in _MODEL_LIST:
-            raise ValueError("所选模型不在此节点允许的三模型范围内；未提交生成请求")
+        """改走站点标准图像接口 /v1/images/generations。
 
-        # Normalize and validate before any account or generation request.
-        aspect_ratio, image_size, reply_type = _normalize_generation_parameters(
-            aspect_ratio,
-            image_size,
-            reply_type,
-        )
-        max_poll_attempts, poll_interval = _normalize_polling_parameters(
-            max_poll_attempts,
-            poll_interval,
-        )
-
-        if aspect_ratio in _EXTENDED_RATIOS and model != "nano-banana-2":
-            raise ValueError(f"{aspect_ratio} 不适用于当前 XINGHUO 模型配置")
-
-        balance_before = query_account_balance(api_key, model)
-        if not balance_before["success"]:
-            error_text = str(balance_before.get("error", ""))
-            if "访问密钥" in error_text or "API Key" in error_text:
-                raise ValueError("访问密钥错误或已失效；未提交生成请求")
-            raise ValueError("余额或模型计费校验失败；未提交生成请求")
-        required_credits = _locked_billing()[model]["credits"]
-        if balance_before["credits"] < required_credits:
-            raise ValueError("账户可用余额不足以完成当前模型的一次生成；未提交生成请求")
-
-        _check_comfyui_interrupt()
-        images = self._collect_images(kwargs)
-        # webHook='-1' is the documented way to receive a task id for polling.
-        payload = {"model": model, "prompt": prompt, "urls": images, "aspectRatio": aspect_ratio,
-                   "imageSize": image_size, "webHook": "-1"}
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        routes = _service_routes()
-        client = SecureDrawClient(config["base_url"], routes["submit"], routes["result"])
-
+        历史版本调用的是第三方 grsai 的 /v1/draw/* 私有路径，实测在
+        ai.xhcyai.org 上是 404 —— 所以老节点的每一次调用都必然失败。
+        这里直接委托给新的标准实现：老工作流不用换节点 ID 就能恢复。
+        """
         try:
-            _check_comfyui_interrupt()
-            response = client.submit(headers, payload)
-            result = _unwrap_draw_response(self._parse_json(response, "生成请求"), "生成请求")
-            status = _status(result)
-            task_id = _task_id(result)
-            if status in _TERMINAL_FAILURE:
-                raise RuntimeError(f"生成任务 {_upstream_failure_reason(result) or '服务端未提供失败原因'}")
-            if not task_id:
-                raise RuntimeError("服务端未返回任务 ID，无法查询生成结果")
-            if status not in _TERMINAL_SUCCESS or not result.get("results"):
-                result = self._poll(task_id, headers, client, max_poll_attempts, poll_interval)
-            if not task_id:
-                task_id = _task_id(result) or "sync"
-            tensors, paths = [], []
-            for index, item in enumerate(self._result_items(result), start=1):
-                _check_comfyui_interrupt()
-                tensor, path = self._save_and_tensor(self._image_bytes(item["value"], client), task_id, index)
-                tensors.append(tensor)
-                paths.append(path)
-            first_shape = tensors[0].shape
-            if any(tensor.shape != first_shape for tensor in tensors):
-                raise RuntimeError("服务端返回了不同尺寸的多张图片，无法组成 ComfyUI IMAGE batch")
-            summary = f"XINGHUO Nano Banana 生成成功\n模型: {model}\n任务 ID: {task_id}\n图片数量: {len(paths)}"
-            return _comfy_result(torch.stack(tensors), summary, "\n".join(paths), "success")
-        except requests.RequestException as exc:
-            return _comfy_result(
-                torch.zeros(1, 64, 64, 3),
-                f"生成失败：{_public_network_failure('生成请求', exc)}",
-                "",
-                "failure",
-            )
-        except (ValueError, RuntimeError) as exc:
-            return _comfy_result(torch.zeros(1, 64, 64, 3), f"生成失败：{exc}", "", "failure")
+            from .nodes_nano_banana import XHCYNanoBanana
+        except ImportError:  # standalone debugging
+            from nodes_nano_banana import XHCYNanoBanana  # type: ignore
 
+        return XHCYNanoBanana().generate(
+            prompt=prompt,
+            model=model,
+            api_key=api_key,
+            max_poll_attempts=max_poll_attempts,
+            poll_interval=poll_interval,
+            base_url=DEFAULT_BASE_URL,
+            aspect_ratio=aspect_ratio,
+            image_size=image_size,
+        )
 
 class ComfyuiXinghuoNanoBananaV3(ComfyuiXinghuoNanoBanana):
     """Clean node schema with no non-request reply_type widget."""

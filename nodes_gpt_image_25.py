@@ -105,12 +105,15 @@ class XHCYGPTImage25(XHCYImageBase):
     VARIANT_MODELS = ["gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]
 
     MODEL_TOOLTIP = (
-        "同一家族的变体，尺寸能力差别很大：\n"
-        "· gpt-image-2.5 —— 站点尺寸白名单只放了 1:1@1K（1024×1024）"
-        "和 9:16@1K（720×1280）两种，选别的会被拒\n"
-        "· gpt-image-2.5-flare —— 站点不校验尺寸，十四种画幅 × 1K/2K/4K 全开\n"
-        "· gpt-image-2.5-sunburst —— 同上，另外画质可到 xhigh / max\n"
-        "要自由画幅就选 -flare 或 -sunburst。"
+        "2026-10-29 实测（每张都下载图片量过像素）：\n"
+        "· gpt-image-2.5 —— 只出 1K。它按比例出图、忽略具体像素："
+        "传 1024x1024 出 1254x1254，传 720x1280 出 940x1672，"
+        "传 2048x2048 仍然出 1254x1254。所以只给它 1K 档\n"
+        "· gpt-image-2.5-flare —— 14 画幅 × 1K/2K/4K 全开，"
+        "实测 3840x2160 出 3840x2160\n"
+        "· gpt-image-2.5-sunburst —— 同 -flare，另外画质可到 xhigh / max，"
+        "实测 2160x3840 出 2160x3840\n"
+        "要 2K / 4K 请选 -flare 或 -sunburst。"
     )
 
     RATIOS = _RATIOS

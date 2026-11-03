@@ -45,17 +45,32 @@ _ASPECT_RATIOS = [
     "4:5", "5:4", "9:16", "16:9", "21:9",
 ]
 
+# 站点 20261029-dashboard-topmodels 起，nano-banana-2 走 Apilio 的
+# Gemini generateContent（原生协议），客户端可以直接用 aspect_ratio + image_size
+# 表达输出，1K / 2K / 4K 三档全部生效。
 _IMAGE_SIZES = ["1K", "2K", "4K"]
 
 # ---------------------------------------------------------------- #
 # 各模型真正能用的 (画幅, 档位) -> 像素
 # ---------------------------------------------------------------- #
 
-# 站点 2026-10-25 「image-contract」版本（tag 20261025-image-contract.gray5）
-# 把 nano-banana 全家的尺寸白名单统一成了 Gemini 官方 10 个比例框，
-# 代码里叫 geminiAspectBoxes。注意：这 10 个框都是 1K 档——
-# 站点现在对它们执行严格白名单，2K/4K 的像素框（2048x2048 / 4096x4096）
-# 不在名单里，会被直接拒（实测 size_not_supported）。
+# ── 站点 2026-10-29（tag 20261029-dashboard-topmodels）的真实行为 ──
+# 读 relay/controller/image.go + relay/adaptor/openai 确认：
+#   · 只要客户端传了 aspect_ratio 或 image_size，就**跳过像素白名单校验**；
+#   · nano-banana-2 改走 Apilio 的 Gemini generateContent（原生协议），
+#     这两个字段会写进 imageConfig，档位真正生效；
+#   · gemini-nano-banana-2.1 在同一渠道，字段原样透传给上游，也生效；
+#   · nano-banana-pro 仍在 GRSAI 渠道，不认 aspect 字段。
+#
+# 服务器直连源站实测（每张都下载图片读 PNG / JPEG 头）：
+#   nano-banana-2          aspect 9:16 + 4K -> 3072x5504
+#   nano-banana-2          aspect 16:9 + 2K -> 2752x1536
+#   gemini-nano-banana-2.1 aspect 9:16 + 4K -> 3072x5504
+#   gemini-nano-banana-2.1 aspect 2:3  + 2K -> 1696x2528
+#   nano-banana-pro        size  768x1344   -> 768x1376（只有 1K）
+#   gemini-2.5-flash-image size  1344x768   -> 1344x768；传 2048x2048 被 400 拒
+#
+# 只能吃像素框的变体，白名单是 Gemini 官方 10 个 1K 框。
 _GEMINI_10_BOXES = {
     ("1:1", "1K"): "1024x1024",
     ("2:3", "1K"): "848x1264",
@@ -69,23 +84,10 @@ _GEMINI_10_BOXES = {
     ("21:9", "1K"): "1536x672",
 }
 
-# gemini-nano-banana-2.1 是自己一套 8 个框（含 4K），站点单独列的
-_GEMINI_SIZES = {
-    ("1:1", "1K"): "1024x1024",
-    ("1:1", "4K"): "4096x4096",
-    ("2:3", "1K"): "1024x1536",
-    ("3:2", "1K"): "1536x1024",
-    ("16:9", "1K"): "1280x720",
-    ("9:16", "1K"): "720x1280",
-    ("16:9", "4K"): "2752x1536",
-    ("9:16", "4K"): "1536x2752",
-}
-
+# 走 aspect 形式的变体不进这张表（resolve_size 会提前返回「比例@档位」）。
 _MODEL_SIZES = {
-    "gemini-2.5-flash-image": _GEMINI_10_BOXES,
-    "nano-banana-2": _GEMINI_10_BOXES,
     "nano-banana-pro": _GEMINI_10_BOXES,
-    "gemini-nano-banana-2.1": _GEMINI_SIZES,
+    "gemini-2.5-flash-image": _GEMINI_10_BOXES,
 }
 
 # 兼容基类的老字段：任一变体支持的最大像素集合
@@ -107,21 +109,27 @@ class XHCYNanoBanana(XHCYImageBase):
     ]
 
     MODEL_TOOLTIP = (
-        "站点 2026-10-25 统一了尺寸契约，四个变体现在都能出全部比例：\n"
-        "· gemini-2.5-flash-image / nano-banana-2 / nano-banana-pro\n"
-        "  —— 10 种画幅（1:1 2:3 3:2 3:4 4:3 4:5 5:4 9:16 16:9 21:9），1K 档\n"
-        "· gemini-nano-banana-2.1 —— 8 个固定框，含 1:1 与 16:9 的 4K\n"
-        "注意：1K 只是站点接受的像素框大小，非方图上游会按更高档位出图。"
+        "2026-10-29 按站点实测重写（每个尺寸都下载图片量过真实像素）：\n"
+        "· nano-banana-2 —— 最全：10 种比例 × 1K / 2K / 4K 全部生效。"
+        "实测 9:16+4K 出 3072x5504，16:9+2K 出 2752x1536\n"
+        "· gemini-nano-banana-2.1 —— 同样 10 种比例 × 1K / 2K / 4K\n"
+        "· nano-banana-pro —— 只有 1K（10 种比例）。它是另一个上游渠道，"
+        "不接受比例+档位写法，选 2K/4K 时节点会自动换成 nano-banana-2\n"
+        "· gemini-2.5-flash-image —— 10 种比例，1K\n"
+        "想一次就出大图，直接选 nano-banana-2。"
     )
 
     RATIOS = _ASPECT_RATIOS
     RESOLUTIONS = _IMAGE_SIZES
     SIZE_FIELD = "image_size"
     SIZE_MAP = _SIZE_MAP
-    # 这三个变体走站点的「比例 + 档位」形式，能出 1K/2K/4K。
+    # 走「比例 + 档位」形式的变体：站点会直接把这两个字段交给上游。
+    # 2026-10-29 站点改版后，只要传了 aspect_ratio / image_size 就跳过像素白名单，
+    # 所以这两个变体不受 1K 框限制，1K/2K/4K 全开。
+    # nano-banana-pro 不能放进来：它在 GRSAI 渠道，传 aspect 会被丢掉
+    # （实测 9:16+4K 出 1408x768），只能按像素框出 1K。
     ASPECT_PARAM_MODELS = [
         "nano-banana-2",
-        "nano-banana-pro",
         "gemini-nano-banana-2.1",
     ]
     MODEL_SIZES = _MODEL_SIZES
@@ -130,17 +138,18 @@ class XHCYNanoBanana(XHCYImageBase):
     DEFAULT_RESOLUTION = "1K"
 
     RATIO_TOOLTIP = (
-        "画面比例。不同变体支持的比例不同：\n"
-        "· 1:1 —— 所有变体都支持\n"
-        "· 2:3 / 3:2 / 16:9 / 9:16 —— 只有 gemini-nano-banana-2.1、"
-        "nano-banana-fast、nano-banana 支持\n"
-        "选到当前模型不支持的比例时，会直接告诉你它能用什么。"
+        "画面比例。\n"
+        "· 常用 10 种：1:1 2:3 3:2 3:4 4:3 4:5 5:4 9:16 16:9 21:9\n"
+        "· 21:9 这类超宽只在 nano-banana-2 / -pro / gemini-2.5-flash-image 上有（1K）\n"
+        "· 想同时要竖图 + 4K，选 nano-banana-2 + 9:16 + 4K\n"
+        "选到当前变体做不到的组合时，节点会自动换一个能做的变体并在输出里写明。"
     )
     RESOLUTION_TOOLTIP = (
         "分辨率档位。\n"
-        "· 1K —— 所有变体都支持\n"
-        "· 4K —— 只有 gemini-nano-banana-2.1 / nano-banana-fast / nano-banana 支持\n"
-        "注意：非正方形框在站点内部统一按 4K 档出图（这是上游实测最稳的一档）。"
+        "· nano-banana-2 / gemini-nano-banana-2.1 —— 1K / 2K / 4K 全开，"
+        "实测 9:16 在 1K 是 768x1344、2K 是 1696x2528、4K 是 3072x5504\n"
+        "· nano-banana-pro / gemini-2.5-flash-image —— 只有 1K\n"
+        "选 nano-banana-pro 又选 2K/4K 时，节点会自动换成 nano-banana-2。"
     )
 
     REPLY_TYPES = ["async", "sync"]
@@ -150,8 +159,8 @@ class XHCYNanoBanana(XHCYImageBase):
 
     RETURN_NAMES = ("image", "response_text", "local_image_paths")
 
-    # 默认用能力最全的：10 种画幅全开，1K 档
-    DEFAULT_MODEL = "gemini-2.5-flash-image"
+    # 默认用能力最全的变体：10 种比例 × 1K / 2K / 4K
+    DEFAULT_MODEL = "nano-banana-2"
     NODE_ID = "xhcy_nano_banana"
     OUTPUT_PREFIX = "xhcy_nano_banana"
     CATEGORY = "XHCY/Image"

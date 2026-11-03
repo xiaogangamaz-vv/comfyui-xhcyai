@@ -89,7 +89,9 @@ class XHCYSeedance2(XHCYVideoBase):
     CATEGORY = "XHCY/Video"
     DESCRIPTION = (
         "XHCY AI · Seedance 2.0（文生 / 首帧 / 首尾帧 / 多模态参考）"
-        "｜480P~4K，4–15 秒，可生成同步音频"
+        "｜480P~4K，4–15 秒，可生成同步音频。"
+        "⚠️ 2026-11-02 实测：站点对 doubao-seedance-2-0 返回 503 "
+        "no available channel，当前没有可用渠道；要出视频请先用 MiniMax-H3 节点。"
     )
 
     # ------------------------------------------------------------------ #

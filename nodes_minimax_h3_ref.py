@@ -35,6 +35,7 @@ try:
     from .xhcy_video_base import (
         XHCYVideoBase,
         audio_input_to_uri,
+        check_reference_video_total,
         image_tensor_to_uri,
         video_input_to_uri,
     )
@@ -53,6 +54,7 @@ except ImportError:  # 允许单文件直接运行调试
     from xhcy_video_base import (  # type: ignore
         XHCYVideoBase,
         audio_input_to_uri,
+        check_reference_video_total,
         image_tensor_to_uri,
         video_input_to_uri,
     )
@@ -300,6 +302,10 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
         """
         content: list = [{"type": "text", "text": prompt}]
 
+        # 参考视频按「合计 ≤15 秒」校验，先算完再开始编码素材，省得白做 base64
+        videos = [kwargs.get(f"video{i}") for i in range(1, MAX_REF_VIDEOS + 1)]
+        check_reference_video_total(videos)
+
         for i in range(1, MAX_REF_IMAGES + 1):
             batch = kwargs.get(f"image{i}")
             if batch is None:
@@ -316,8 +322,7 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
                     }
                 )
 
-        for i in range(1, MAX_REF_VIDEOS + 1):
-            video = kwargs.get(f"video{i}")
+        for video in videos:
             if video is None:
                 continue
             content.append(

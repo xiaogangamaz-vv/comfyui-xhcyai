@@ -10,6 +10,8 @@ which ComfyUI surfaces directly on the node.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import time
 from typing import Any
 
@@ -27,6 +29,10 @@ VIDEO_TASK_PATH = "/v1/video/generations/{task_id}"
 VIDEO_REGENERATIONS_PATH = "/v1/video/regenerations"
 # H3 Context-IR：同步返回增强后的提示词，不产生可查询任务
 VIDEO_CONTEXT_IR_PATH = "/v1/video/context-ir"
+# 视频超分（Video Super-Resolution）：提交与查询都在 /v1/video/enhance 下，
+# 与生成任务的 /v1/video/generations/{task_id} **不是同一条路径**，必须分开。
+VIDEO_ENHANCE_PATH = "/v1/video/enhance"
+VIDEO_ENHANCE_TASK_PATH = "/v1/video/enhance/{task_id}"
 # 文本/对话模型（OpenAI 兼容）
 CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 
@@ -236,6 +242,16 @@ class XHCYClient:
         """768P -> 2K 再生成。请求体与生成接口不同，见 BuildRegenerationPayload。"""
         return self.post_json(VIDEO_REGENERATIONS_PATH, payload, "视频再生成请求")
 
+    def submit_video_enhancement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """视频超分提交。两种输入二选一：source_task_id 或 content 里的 base_video。"""
+        return self.post_json(VIDEO_ENHANCE_PATH, payload, "视频超分请求")
+
+    def poll_video_enhancement(self, task_id: str) -> dict[str, Any]:
+        """超分任务的查询路径与生成任务不同，不能复用 poll_video。"""
+        return self.get_json(
+            VIDEO_ENHANCE_TASK_PATH.format(task_id=task_id), "视频超分结果查询"
+        )
+
     def submit_context_ir(self, payload: dict[str, Any]) -> dict[str, Any]:
         """H3 Context-IR。站点同步等待上游产出一段增强后的提示词，可能需要 1～2 分钟。"""
         return self.post_json(VIDEO_CONTEXT_IR_PATH, payload, "Context-IR 请求")
@@ -302,6 +318,71 @@ def extract_image_urls(payload: dict[str, Any]) -> list[str]:
     for container in containers:
         collect(container)
     return urls
+
+
+# Fields the gateway may use to embed the image bytes instead of linking them.
+# ai.xhcyai.org answers /v1/images/generations with data[].b64_json even when the
+# caller asked for response_format=url, so a url-only reader reports "no image"
+# for a request that actually succeeded and was billed.
+_B64_FIELDS = ("b64_json", "b64", "base64", "image_base64", "imageBase64")
+
+
+def _decode_b64_image(value: str) -> bytes | None:
+    """Decode one base64 payload, tolerating a data-URI prefix and padding."""
+    text = value.strip()
+    if text.startswith("data:"):
+        _, _, text = text.partition(",")
+    text = text.strip()
+    if not text:
+        return None
+    # Some gateways emit newlines inside the blob; strip whitespace before padding.
+    text = "".join(text.split())
+    text += "=" * (-len(text) % 4)
+    try:
+        raw = base64.b64decode(text, validate=False)
+    except (binascii.Error, ValueError):
+        return None
+    return raw if len(raw) > 512 else None
+
+
+def extract_inline_images(payload: dict[str, Any]) -> list[bytes]:
+    """Return images embedded in the response body as base64.
+
+    Order matches extract_image_urls so index i of either list refers to the
+    same picture. Empty when the gateway linked the files instead.
+    """
+    blobs: list[bytes] = []
+    containers: list[Any] = [payload]
+    for key in ("data", "results", "result", "output", "images"):
+        value = payload.get(key)
+        if isinstance(value, (list, dict)):
+            containers.append(value)
+
+    def collect(node: Any) -> None:
+        if isinstance(node, list):
+            for entry in node:
+                collect(entry)
+            return
+        if not isinstance(node, dict):
+            return
+        for field in _B64_FIELDS:
+            value = node.get(field)
+            if isinstance(value, str):
+                raw = _decode_b64_image(value)
+                if raw:
+                    blobs.append(raw)
+                return
+            if isinstance(value, dict):
+                inner = value.get("data") or value.get("base64")
+                if isinstance(inner, str):
+                    raw = _decode_b64_image(inner)
+                    if raw:
+                        blobs.append(raw)
+                    return
+
+    for container in containers:
+        collect(container)
+    return blobs
 
 
 def extract_video_url(payload: dict[str, Any]) -> str:
