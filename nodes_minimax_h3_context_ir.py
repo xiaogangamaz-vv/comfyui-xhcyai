@@ -28,6 +28,7 @@ try:
         extract_task_id,
     )
     from .xhcy_v3 import as_v3_node
+    from .xhcy_credentials import resolve_credentials
     from .xhcy_video_base import (
         audio_input_to_uri,
         image_tensor_to_uri,
@@ -44,6 +45,7 @@ except ImportError:  # allow running this file standalone for debugging
         extract_task_id,
     )
     from xhcy_v3 import as_v3_node  # type: ignore
+    from xhcy_credentials import resolve_credentials  # type: ignore
     from xhcy_video_base import (  # type: ignore
         audio_input_to_uri,
         image_tensor_to_uri,
@@ -228,6 +230,7 @@ class XHCYMiniMaxH3ContextIR:
         if ratio:
             payload["ratio"] = ratio
 
+        api_key, base_url = resolve_credentials(api_key, base_url)
         client = XHCYClient(api_key, base_url)
         response = client.submit_context_ir(payload)
         enhanced = extract_prompt(response)

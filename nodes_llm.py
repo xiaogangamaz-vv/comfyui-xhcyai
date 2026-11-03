@@ -24,6 +24,7 @@ try:
         extract_chat_text,
     )
     from .xhcy_image_base import tensor_to_data_uri
+    from .xhcy_credentials import resolve_credentials
 except ImportError:  # allow running this file standalone for debugging
     from xhcy_client import (  # type: ignore
         DEFAULT_BASE_URL,
@@ -32,12 +33,18 @@ except ImportError:  # allow running this file standalone for debugging
         extract_chat_text,
     )
     from xhcy_image_base import tensor_to_data_uri  # type: ignore
+    from xhcy_credentials import resolve_credentials  # type: ignore
 
 
 # 站点当前公开的文本模型（GET /api/public-models，2026-10-23 核对）
 #
 # 已剔除 MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat：
 # 这三个挂在只做视频的 metaso 渠道上，站点也不再对外公开，调文本会失败。
+# 2026-11-02 按 GET https://ai.xhcyai.org/v1/models 的真实清单重排。
+# 已移除：gemini-3-flash / gemini-3.1-pro —— 站点上已经没有这两个，
+# 选了只会报「no available channel」。
+# 也已移除 MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat：
+# 2026-11-02 实测调文本返回 HTTP 404（它们挂在只做视频的渠道上）。
 MODEL_LIST = [
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -47,12 +54,10 @@ MODEL_LIST = [
     "claude-opus-5-5",
     "claude-fable-5",
     "claude-fable-5-1",
-    "gemini-3-flash",
-    "gemini-3.1-pro",
     "gemini-3.8-flash",
 ]
 
-DEFAULT_MODEL = "gemini-3-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 # 站点没有给出各模型的能力清单，这里按公开常识标注，仅用于提示
 _VISION_HINT = (
@@ -174,6 +179,7 @@ class XHCYChat:
         if max_tokens:
             payload["max_tokens"] = int(max_tokens)
 
+        api_key, base_url = resolve_credentials(api_key, base_url)
         client = XHCYClient(api_key, base_url)
         response = client.chat(payload)
         text = extract_chat_text(response)

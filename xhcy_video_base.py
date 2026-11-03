@@ -65,6 +65,11 @@ except ImportError:  # allow running this file standalone for debugging
         extract_video_url,
     )
 
+try:
+    from .xhcy_credentials import resolve_credentials
+except ImportError:  # standalone debugging
+    from xhcy_credentials import resolve_credentials  # type: ignore
+
 
 # ---------------------------------------------------------------------- #
 # Reference-material limits
@@ -84,6 +89,7 @@ except ImportError:  # allow running this file standalone for debugging
 MAX_MATERIAL_IMAGE_EDGE = 2560
 MATERIAL_IMAGE_QUALITY = 95
 # 上限按「base64 后不超 Cloudflare 单请求 100 MB」反推：raw×1.34 是实际上传量。
+# 现在只对着参考音频判；参考视频一律先压到 REF_VIDEO_COMPRESS_TARGET。
 MAX_MATERIAL_BYTES = 48 * 1024 * 1024      # 单个素材，base64 后约 64 MB
 MAX_MATERIAL_TOTAL = 60 * 1024 * 1024      # 整个请求，base64 后约 80 MB
 
@@ -91,6 +97,9 @@ MAX_MATERIAL_TOTAL = 60 * 1024 * 1024      # 整个请求，base64 后约 80 MB
 #   media duration must be between 2 and 15.5 seconds
 REF_VIDEO_MIN_SECONDS = 2.0
 REF_VIDEO_MAX_SECONDS = 15.5
+# 另一条限制看的是**合计**，不是单段（实测报错原文，提交之后才回来，
+# 那时已经白扣了一次费用）：reference video total duration must not exceed 15 seconds
+REF_VIDEO_TOTAL_SECONDS = 15.0
 # 上游对参考视频的分辨率有下限，低于 480p 会被直接拒（实测报错原文：
 # "The video resolution is too low ... The minimum resolution requirement is 480p"）。
 # 用短边判定，竖屏 480x854 也算合格。
@@ -272,19 +281,40 @@ def compress_reference_video(
                     pass
 
 
+def video_duration(video) -> float | None:
+    """VIDEO 的时长（秒）。元数据缺失就返回 None，别因此误杀素材。"""
+    if not hasattr(video, "get_duration"):
+        return None
+    try:
+        value = float(video.get_duration())
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def check_reference_video_total(videos) -> None:
+    """参考视频的时长是按**合计**校验的：单段 2～15.5 秒，几段加起来不能超 15 秒。
+
+    上游提交成功之后才回这条拒绝，一次白扣费用，所以先在本机拦掉。
+    """
+    durations = [value for value in map(video_duration, videos) if value is not None]
+    total = sum(durations)
+    if total <= REF_VIDEO_TOTAL_SECONDS:
+        return
+    segments = " + ".join("%.1f" % value for value in durations)
+    suffix = "（%s）" % segments if len(durations) > 1 else ""
+    raise XHCYError(
+        "参考视频总时长 %.1f 秒%s，上游要求不超过 %.0f 秒。\n请剪短后再连接。"
+        % (total, suffix, REF_VIDEO_TOTAL_SECONDS)
+    )
+
+
 def video_input_to_uri(video) -> str:
     """ComfyUI VIDEO input -> MP4 data URI."""
     # 站点对参考视频有硬性要求，且只在提交之后才检查，被拒时已经消耗了一次请求。
     # 实测报错原文：media duration must be between 2 and 15.5 seconds /
     # media metadata is invalid。先在这里挡掉，用户立刻看到中文原因。
-    duration = None
-    if hasattr(video, "get_duration"):
-        try:
-            value = float(video.get_duration())
-            if value > 0:
-                duration = value
-        except Exception:
-            duration = None
+    duration = video_duration(video)
     if duration is not None and not (
         REF_VIDEO_MIN_SECONDS <= duration <= REF_VIDEO_MAX_SECONDS
     ):
@@ -346,14 +376,9 @@ def video_input_to_uri(video) -> str:
             "请先用 MP4 重编码再连接。"
         )
 
-    if len(raw) > MAX_MATERIAL_BYTES:
-        raise XHCYError(
-            "参考视频超过 %d MiB，请先压缩或剪短后再连接"
-            % (MAX_MATERIAL_BYTES // (1024 * 1024))
-        )
-
     # 体积压到能传得动为止。base64 会把字节数放大到 4/3，实测 5.5 MB 的视频
     # 让整包涨到 8.3 MB，站点提交上游 8 分钟传不完，用户只看到「一直转圈」。
+    # 先压后判：原先超过 48 MiB 直接拒，可那些视频能压到 2 MiB，等于白拒。
     original_size = len(raw)
     if original_size > REF_VIDEO_COMPRESS_OVER:
         smaller = compress_reference_video(raw, duration, REF_VIDEO_COMPRESS_TARGET)
@@ -600,6 +625,7 @@ class XHCYVideoBase:
         prompt = (prompt or "").strip()
         if not prompt:
             raise XHCYError("提示词（prompt）不能为空")
+        api_key, base_url = resolve_credentials(api_key, base_url)
 
         # 站点 prompt_max = 7000，超了会被上游拒，先在本地挡掉
         if self.PROMPT_MAX_CHARS and len(prompt) > self.PROMPT_MAX_CHARS:
@@ -744,19 +770,26 @@ class XHCYVideoBase:
         ) from exc
 
     @staticmethod
-    def _wait_for_video(client: XHCYClient, task_id: str, attempts: int, interval: int) -> dict:
+    def _wait_for_video(client: XHCYClient, task_id: str, attempts: int, interval: int,
+                        poll_fn=None) -> dict:
+        """等任务完成。poll_fn 用于超分这类查询路径不同的接口，不传就查生成任务。"""
         last_status = "处理中"
         for _ in range(attempts):
             sleep_interruptible(interval)
             check_interrupt()
-            current = XHCYVideoBase._poll_with_retry(client, task_id)
+            current = XHCYVideoBase._poll_with_retry(client, task_id, poll_fn=poll_fn)
             status = extract_status(current)
             if status:
                 last_status = status
             if status in STATUS_SUCCESS:
                 return current
             if status in STATUS_FAILURE:
-                raise XHCYError(f"生成失败：{extract_failure_reason(current) or '服务端未给出原因'}")
+                # 带上任务号：站点只透传一句兜底文案，完整原因得按任务号去
+                # 站点任务列表里看，没有任务号就只能靠时间戳猜哪一跑。
+                raise XHCYError(
+                    "生成失败：%s（任务 %s，状态 %s）"
+                    % (extract_failure_reason(current) or "服务端未给出原因", task_id, status)
+                )
             if not status and extract_video_url(current):
                 return current
         if last_status == "submitted":
@@ -774,10 +807,13 @@ class XHCYVideoBase:
         raise XHCYError(f"等待超时，已查询 {attempts} 次，最后状态：{last_status}")
 
     @staticmethod
-    def _poll_with_retry(client: XHCYClient, task_id: str, retries: int = 2) -> dict:
+    def _poll_with_retry(client: XHCYClient, task_id: str, retries: int = 2,
+                        poll_fn=None) -> dict:
         last_error: Exception | None = None
         for attempt in range(retries + 1):
             try:
+                if poll_fn is not None:
+                    return poll_fn(task_id)
                 return client.poll_video(task_id)
             except XHCYError as exc:
                 message = str(exc)
