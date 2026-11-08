@@ -216,11 +216,19 @@ nano-banana-2 不支持「16:9 + 1K」。
 | `api_key` | XHCY AI 访问密钥，每个节点单独填 |
 | `aspect_ratio` | `auto` / `1:1` / `2:3` / `3:2` / `16:9` / `9:16`。**能选哪些取决于 `model`**，见上面对照表 |
 | `image_size` | `1K` / `4K`。同样取决于 `model` |
-| `reply_type` | `async` / `sync`。本站禁用了异步图像生成，**选什么都不影响，都会按同步执行** |
+| `reply_type` | `async` / `sync`。控件留给旧工作流；请求体固定带 `"async": true` 后再轮询，**不会再发同步长请求** |
 | `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔，默认 300 / 5 |
 | `base_url` | 站点地址，默认 `https://ai.xhcyai.org` |
 
 输出：`image` / `response_text`（摘要）/ `local_image_paths`（落盘路径）。
+
+图像生成在 `POST /v1/images/generations` 的 JSON 里带 `"async": true` 再轮询。
+查询参数 `?async=true` 会被网关忽略，任务仍是同步，负载高时会 524。
+网关必须设置 `ASYNC_GENERATION_ENABLED=true`；没开时返回 HTTP 400 `async_generation_disabled`，节点直接报错，不会改回同步。
+异步成功的图片在 `content.url`（和本站同源的地址下载时会带访问密钥）。
+同步或内嵌结果仍认 `data[].url` / `data[].b64_json`。
+本家族不传 `quality`，也不传 `response_format`。
+轮询超时是失败，不会返回空图。
 
 > **尺寸能力（2026-10-23 按站点源码补齐）**
 >

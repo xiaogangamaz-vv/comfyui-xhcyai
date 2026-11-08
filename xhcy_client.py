@@ -39,12 +39,56 @@ CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 300  # image/video generation can genuinely take minutes
 
-STATUS_SUCCESS = {"succeeded", "success", "completed", "done", "finished"}
-STATUS_FAILURE = {"failed", "failure", "error", "violation", "cancelled", "canceled"}
+STATUS_SUCCESS = {"succeeded", "success", "completed", "complete", "done", "finished"}
+# timeout / timed_out are terminal on the image task API. They must fail the
+# poll immediately, not burn max_poll_attempts and then look like a client wait.
+STATUS_FAILURE = {
+    "failed", "failure", "fail", "error", "violation", "cancelled", "canceled",
+    "timeout", "timed_out",
+}
+
+
+def model_rejects_quality(model: str) -> bool:
+    """Banana and Gemini image models answer HTTP 400 param_not_supported for quality."""
+    name = (model or "").strip().lower()
+    if not name:
+        return False
+    if "banana" in name:
+        return True
+    # gemini-2.5-flash-image, gemini-3.1-flash-image-preview, and the same shape.
+    return "gemini" in name and "image" in name
+
+
+def model_supports_quality(model: str) -> bool:
+    """gpt-image 2.5 / 2.6 tiers accept quality. Banana-family ids never do."""
+    if model_rejects_quality(model):
+        return False
+    # "gpt-image-2" and "gpt-image-2-vip" do not match; "gpt-image-2.6" does.
+    return (model or "").strip().lower().startswith("gpt-image-2.")
 
 
 class XHCYError(RuntimeError):
     """Error message safe to show to the end user."""
+
+
+def _payload_mentions(response: requests.Response, needle: str) -> bool:
+    """True when the JSON body contains needle in any nested string (code or message)."""
+    needle = needle.lower()
+    try:
+        payload = response.json()
+    except ValueError:
+        return needle in (response.text or "").lower()
+
+    def walk(node: Any) -> bool:
+        if isinstance(node, str):
+            return needle in node.lower()
+        if isinstance(node, dict):
+            return any(walk(value) for value in node.values())
+        if isinstance(node, list):
+            return any(walk(value) for value in node)
+        return False
+
+    return walk(payload)
 
 
 def _body_message(response: requests.Response) -> str:
@@ -66,6 +110,15 @@ def _http_error(response: requests.Response, context: str) -> XHCYError:
     code = response.status_code
     detail = _body_message(response)
     suffix = ("：" + detail) if detail else ""
+    if code == 400 and _payload_mentions(response, "async_generation_disabled"):
+        # The gate ignores ?async=true. Body {"async": true} is rejected with this
+        # code when ASYNC_GENERATION_ENABLED is off. Do not retry as a sync call.
+        return XHCYError(
+            "图像异步生成未开启（HTTP 400 async_generation_disabled）。"
+            "请在网关设置环境变量 ASYNC_GENERATION_ENABLED=true 后重启。"
+            "节点不会退回同步请求，否则会再次撞上 Cloudflare 524。"
+            + suffix
+        )
     if code == 400:
         return XHCYError(f"{context}被服务端拒绝（HTTP 400）{suffix}")
     if code == 401:
@@ -217,7 +270,28 @@ class XHCYClient:
         return names
 
     def submit_image(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.post_json(IMAGE_GENERATIONS_PATH, payload, "图像生成请求")
+        """Submit POST /v1/images/generations with {"async": true} in the JSON body.
+
+        Platform IsAsyncImageRequest only reads that body field. A query string
+        (?async=true) is ignored, and the call stays synchronous until Cloudflare
+        returns 524. Callers poll with poll_image. A gateway that still inlines
+        data[] is fine — the body is returned as-is.
+
+        If the gate has ASYNC_GENERATION_ENABLED unset, the response is HTTP 400
+        async_generation_disabled. That error is raised as-is; there is no sync
+        fallback.
+
+        response_format is never forwarded. quality is dropped for banana / Gemini
+        image models (HTTP 400 param_not_supported) and when the caller left it
+        at auto.
+        """
+        body = dict(payload)
+        body.pop("response_format", None)
+        quality = str(body.get("quality") or "").strip().lower()
+        if not quality or quality == "auto" or model_rejects_quality(str(body.get("model") or "")):
+            body.pop("quality", None)
+        body["async"] = True
+        return self.post_json(IMAGE_GENERATIONS_PATH, body, "图像生成请求")
 
     def poll_image(self, task_id: str) -> dict[str, Any]:
         return self.get_json(IMAGE_TASK_PATH.format(task_id=task_id), "图像结果查询")
@@ -280,11 +354,21 @@ def pick(payload: dict[str, Any], *keys: str) -> Any:
 
 def extract_task_id(payload: dict[str, Any]) -> str:
     value = pick(payload, "id", "task_id", "taskId")
-    if value:
-        return str(value)
+    if value and not isinstance(value, (dict, list)):
+        text = str(value).strip()
+        # A base64 blob is not a task id. Real ids are short tokens.
+        if text and len(text) <= 200 and " " not in text and "\n" not in text:
+            return text
     data = payload.get("data")
     if isinstance(data, str):
-        return data
+        text = data.strip()
+        if not text or " " in text or "\n" in text or len(text) > 200:
+            return ""
+        # Some gateways put the image bytes directly in `data`. That must not
+        # be polled as a task id, even when the blob is a tiny PNG.
+        if text.startswith("data:") or _decode_b64_image(text):
+            return ""
+        return text
     return ""
 
 
@@ -292,39 +376,22 @@ def extract_status(payload: dict[str, Any]) -> str:
     return str(pick(payload, "status", "state", "task_status") or "").lower()
 
 
-def extract_image_urls(payload: dict[str, Any]) -> list[str]:
-    urls: list[str] = []
-    containers: list[Any] = [payload]
-    for key in ("data", "results", "result", "output", "images"):
-        value = payload.get(key)
-        if isinstance(value, (list, dict)):
-            containers.append(value)
-    seen: set[str] = set()
-
-    def collect(node: Any) -> None:
-        if isinstance(node, list):
-            for entry in node:
-                collect(entry)
-            return
-        if not isinstance(node, dict):
-            return
-        value = node.get("url") or node.get("image_url") or node.get("imageUrl")
-        if isinstance(value, dict):
-            value = value.get("url")
-        if value and str(value) not in seen:
-            seen.add(str(value))
-            urls.append(str(value))
-
-    for container in containers:
-        collect(container)
-    return urls
-
-
 # Fields the gateway may use to embed the image bytes instead of linking them.
-# ai.xhcyai.org answers /v1/images/generations with data[].b64_json even when the
-# caller asked for response_format=url, so a url-only reader reports "no image"
-# for a request that actually succeeded and was billed.
+# Live /v1/images/generations replies often contain data[].b64_json and no url.
 _B64_FIELDS = ("b64_json", "b64", "base64", "image_base64", "imageBase64")
+# `content` is the async task envelope: {"content": {"url": "https://.../content"}}.
+# `data` stays for synchronous OpenAI-style data[].url / data[].b64_json.
+_IMAGE_CONTAINER_KEYS = ("data", "results", "result", "output", "images", "content")
+
+
+def _looks_like_image(raw: bytes) -> bool:
+    if len(raw) < 8:
+        return False
+    if raw.startswith(b"\x89PNG\r\n\x1a\n") or raw.startswith(b"\xff\xd8\xff"):
+        return True
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return True
+    return len(raw) >= 12 and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP"
 
 
 def _decode_b64_image(value: str) -> bytes | None:
@@ -342,46 +409,119 @@ def _decode_b64_image(value: str) -> bytes | None:
         raw = base64.b64decode(text, validate=False)
     except (binascii.Error, ValueError):
         return None
-    return raw if len(raw) > 512 else None
+    # Short non-images (task ids, model names) are valid base64 too. Keep a
+    # decoded blob when it is an actual image, or when it is long enough that
+    # it cannot be one of those tokens.
+    if _looks_like_image(raw) or len(raw) > 512:
+        return raw
+    return None
 
 
-def extract_inline_images(payload: dict[str, Any]) -> list[bytes]:
-    """Return images embedded in the response body as base64.
+def _http_url(value: Any) -> str | None:
+    if isinstance(value, dict):
+        value = value.get("url")
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    return None
 
-    Order matches extract_image_urls so index i of either list refers to the
-    same picture. Empty when the gateway linked the files instead.
+
+def extract_image_slots(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Image items in response order.
+
+    Each slot is {"url": str | None, "raw": bytes | None}.
+
+    Sync replies use data[].url and data[].b64_json. Async task replies use
+    content.url (or a nested content object / a bare http content string).
+    A data[] entry with only url and a sibling with only b64_json both show up,
+    in that order. When one entry carries both, both fields are kept so the
+    caller can download the url and fall back to the embedded bytes.
     """
-    blobs: list[bytes] = []
-    containers: list[Any] = [payload]
-    for key in ("data", "results", "result", "output", "images"):
-        value = payload.get(key)
-        if isinstance(value, (list, dict)):
-            containers.append(value)
+    slots: list[dict[str, Any]] = []
+    seen: set[int] = set()
 
-    def collect(node: Any) -> None:
+    def fields(node: dict[str, Any]) -> tuple[str | None, bytes | None]:
+        url = None
+        for key in ("url", "image_url", "imageUrl"):
+            if key in node:
+                url = _http_url(node.get(key))
+                if url:
+                    break
+        raw = None
+        for field in _B64_FIELDS:
+            value = node.get(field)
+            if isinstance(value, dict):
+                value = value.get("data") or value.get("base64")
+            if isinstance(value, str) and value.strip():
+                raw = _decode_b64_image(value)
+                if raw:
+                    break
+        if raw is None:
+            for key in ("url", "image_url", "imageUrl"):
+                value = node.get(key)
+                if isinstance(value, dict):
+                    value = value.get("url")
+                if isinstance(value, str) and value.strip().startswith("data:"):
+                    raw = _decode_b64_image(value)
+                    if raw:
+                        break
+        return url, raw
+
+    def walk(node: Any) -> None:
         if isinstance(node, list):
             for entry in node:
-                collect(entry)
+                walk(entry)
             return
         if not isinstance(node, dict):
             return
-        for field in _B64_FIELDS:
-            value = node.get(field)
-            if isinstance(value, str):
-                raw = _decode_b64_image(value)
-                if raw:
-                    blobs.append(raw)
-                return
-            if isinstance(value, dict):
-                inner = value.get("data") or value.get("base64")
-                if isinstance(inner, str):
-                    raw = _decode_b64_image(inner)
-                    if raw:
-                        blobs.append(raw)
-                    return
+        marker = id(node)
+        if marker in seen:
+            return
+        seen.add(marker)
+        kids = [
+            node[key]
+            for key in _IMAGE_CONTAINER_KEYS
+            if isinstance(node.get(key), (list, dict))
+        ]
+        content = node.get("content")
+        content_url = _http_url(content) if isinstance(content, str) else None
+        url, raw = fields(node)
+        if kids or content_url:
+            before = len(slots)
+            for child in kids:
+                walk(child)
+            if content_url:
+                slots.append({"url": content_url, "raw": None})
+            if len(slots) == before and (url or raw):
+                slots.append({"url": url, "raw": raw})
+            return
+        if url or raw:
+            slots.append({"url": url, "raw": raw})
 
-    for container in containers:
-        collect(container)
+    walk(payload)
+    return slots
+
+
+def extract_image_urls(payload: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for slot in extract_image_slots(payload):
+        url = slot.get("url")
+        if isinstance(url, str) and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def extract_inline_images(payload: dict[str, Any]) -> list[bytes]:
+    """Images embedded in the response body, in the same order as data[]."""
+    blobs: list[bytes] = []
+    for slot in extract_image_slots(payload):
+        raw = slot.get("raw")
+        if isinstance(raw, (bytes, bytearray)) and raw:
+            blobs.append(bytes(raw))
     return blobs
 
 

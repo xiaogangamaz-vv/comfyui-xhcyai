@@ -40,10 +40,11 @@ try:
         XHCYClient,
         XHCYError,
         extract_failure_reason,
-        extract_image_urls,
-        extract_inline_images,
+        extract_image_slots,
         extract_status,
         extract_task_id,
+        model_rejects_quality,
+        model_supports_quality,
     )
     from .xhcy_credentials import resolve_credentials as _resolve_credentials
 except ImportError:  # allow running this file standalone for debugging
@@ -54,10 +55,11 @@ except ImportError:  # allow running this file standalone for debugging
         XHCYClient,
         XHCYError,
         extract_failure_reason,
-        extract_image_urls,
-        extract_inline_images,
+        extract_image_slots,
         extract_status,
         extract_task_id,
+        model_rejects_quality,
+        model_supports_quality,
     )
     from xhcy_credentials import resolve_credentials as _resolve_credentials  # type: ignore
 
@@ -233,7 +235,11 @@ class XHCYImageBase:
     # 非空则在节点上追加 reply_type 下拉
     REPLY_TYPES: list[str] = []
     DEFAULT_REPLY_TYPE = "async"
-    REPLY_TOOLTIP = "提交方式；本站不支持异步图像生成，实际都会按同步执行。"
+    REPLY_TOOLTIP = (
+        "历史兼容参数。图像生成固定在请求体里带 async=true 再轮询，"
+        "避免同步长请求被网关 524 掐断。选 sync 也不会改回同步。"
+        "网关需 ASYNC_GENERATION_ENABLED=true，否则会 400 async_generation_disabled。"
+    )
     NODE_ID = "xhcy_image_base"
     OUTPUT_PREFIX = "xhcy_image"
 
@@ -560,11 +566,12 @@ class XHCYImageBase:
         self.check_references(model, references)
 
         client = XHCYClient(api_key, base_url)
+        # 不传 response_format。强制 url 时，站点仍可能只回 b64_json，
+        # 旧逻辑会把已经成功的请求报成「没有图片」。两种都在下面解码。
         payload: dict = {
             "model": model,
             "prompt": prompt,
             "n": 1,
-            "response_format": "url",
         }
         # 走「比例 + 档位」的变体（站点侧的 Gemini 原生协议模型）：
         # 直接发 aspect_ratio + image_size，站点会把它们写进上游的 imageConfig。
@@ -577,37 +584,41 @@ class XHCYImageBase:
                 payload["image_size"] = str(resolution).upper()
         elif size != "auto":
             payload["size"] = size
-        if quality and quality != "auto":
-            payload["quality"] = quality
+        # banana / gemini image（含 gemini-3.1-flash-image-preview）传 quality
+        # 会 HTTP 400 param_not_supported。只有声明了画质档、或 gpt-image-2.x
+        # 这种档位模型，才把非 auto 的 quality 放进请求。
+        chosen_quality = str(quality or "").strip()
+        if (
+            chosen_quality
+            and chosen_quality.lower() != "auto"
+            and not model_rejects_quality(model)
+            and (self.QUALITIES or model_supports_quality(model))
+        ):
+            payload["quality"] = chosen_quality
         if references:
             # Multi-reference mode: this is what makes it image-to-image.
             payload["image"] = references
 
+        # submit_image 在 JSON 里写 async=true（查询参数会被网关忽略）。
+        # 同步长请求在负载高时被 Cloudflare 524 掐断。
+        # 网关没开 ASYNC_GENERATION_ENABLED 时会 400，这里不改回同步。
         first = client.submit_image(payload)
         result = self._resolve_result(client, first, attempts, interval)
 
-        urls = extract_image_urls(result)
-        inline = extract_inline_images(result)
-        if not urls and not inline:
-            raise XHCYError("生成完成，但返回里没有找到图片地址")
+        slots = extract_image_slots(result)
+        if not slots:
+            raise XHCYError(
+                "图像生成失败：返回里没有找到图片"
+                "（没有 content.url，也没有 data[].url / b64_json）"
+            )
 
         tensors, paths = [], []
-        if inline and not urls:
-            # ai.xhcyai.org 的 /v1/images/generations 即使请求里写了
-            # response_format=url，仍然把图片以 data[].b64_json 内嵌返回。
-            # 这类响应用户侧是成功的（也已经计费），直接解码保存，不再发下载请求。
-            for index, raw in enumerate(inline, start=1):
-                check_interrupt()
-                tensor, path = self._save_image(raw, index)
-                tensors.append(tensor)
-                paths.append(path)
-        else:
-            for index, url in enumerate(urls, start=1):
-                check_interrupt()
-                raw = client.download(url)
-                tensor, path = self._save_image(raw, index)
-                tensors.append(tensor)
-                paths.append(path)
+        for index, slot in enumerate(slots, start=1):
+            check_interrupt()
+            raw = self._bytes_for_slot(client, slot)
+            tensor, path = self._save_image(raw, index)
+            tensors.append(tensor)
+            paths.append(path)
 
         if len({tuple(t.shape) for t in tensors}) > 1:
             raise XHCYError("服务端返回了尺寸不一致的多张图片，无法合并成一批")
@@ -639,11 +650,33 @@ class XHCYImageBase:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def _bytes_for_slot(client: XHCYClient, slot: dict) -> bytes:
+        """One data[] item -> image bytes. http(s) url is downloaded; b64 is decoded.
+
+        An item that carries both uses the url and falls back to the embedded
+        bytes when the download fails. data: URIs are already decoded into raw.
+        """
+        url = slot.get("url") or ""
+        raw = slot.get("raw")
+        if isinstance(url, str) and (url.startswith("http://") or url.startswith("https://")):
+            try:
+                return client.download(url)
+            except XHCYError:
+                if isinstance(raw, (bytes, bytearray)) and raw:
+                    return bytes(raw)
+                raise
+        if isinstance(raw, (bytes, bytearray)) and raw:
+            return bytes(raw)
+        raise XHCYError("服务端返回的图片字段无法识别")
+
+    @staticmethod
     def _resolve_result(client: XHCYClient, first: dict, attempts: int, interval: int) -> dict:
-        """Use a synchronous answer directly, otherwise poll by task id."""
+        """Use an inline answer directly, otherwise poll the async task id."""
         status = extract_status(first)
+        if status in STATUS_FAILURE:
+            raise XHCYError(f"生成失败：{extract_failure_reason(first) or '服务端未给出原因'}")
         # The gateway may link the result or embed it as base64; both mean "done".
-        if (extract_image_urls(first) or extract_inline_images(first)) and status not in STATUS_FAILURE:
+        if extract_image_slots(first):
             return first
 
         task_id = extract_task_id(first)
@@ -660,36 +693,39 @@ class XHCYImageBase:
                 + "服务端原始返回：" + payload_snippet(first)
             )
 
+        print(f"[XHCY] 图像任务 {task_id} 已提交，开始轮询结果")
         last_status = status or "处理中"
+        # 400/401/403/404 won't start working on a later try. 429/5xx/524/超时 will.
+        fatal_markers = ("HTTP 400", "HTTP 401", "HTTP 403", "HTTP 404")
         for _ in range(attempts):
             sleep_interruptible(interval)
             check_interrupt()
-            current = XHCYImageBase._poll_with_retry(client, task_id)
+            try:
+                current = client.poll_image(task_id)
+            except XHCYError as exc:
+                message = str(exc)
+                if any(marker in message for marker in fatal_markers):
+                    raise
+                last_status = message
+                continue
             status = extract_status(current)
             if status:
                 last_status = status
-            if status in STATUS_SUCCESS:
-                return current
             if status in STATUS_FAILURE:
                 raise XHCYError(f"生成失败：{extract_failure_reason(current) or '服务端未给出原因'}")
-            if not status and (extract_image_urls(current) or extract_inline_images(current)):
+            if status in STATUS_SUCCESS:
+                if extract_image_slots(current):
+                    return current
+                raise XHCYError(
+                    "图像生成失败：任务已结束，但返回里没有图片地址"
+                    "（需要 content.url，或 data[].url / b64_json）"
+                )
+            if extract_image_slots(current):
                 return current
-        raise XHCYError(f"等待超时，已查询 {attempts} 次，最后状态：{last_status}")
-
-    @staticmethod
-    def _poll_with_retry(client: XHCYClient, task_id: str, retries: int = 2) -> dict:
-        last_error: Exception | None = None
-        for attempt in range(retries + 1):
-            try:
-                return client.poll_image(task_id)
-            except XHCYError as exc:
-                message = str(exc)
-                if "HTTP 401" in message or "HTTP 403" in message:
-                    raise
-                last_error = exc
-                if attempt < retries:
-                    sleep_interruptible(2)
-        raise last_error if last_error else XHCYError("结果查询失败")
+        raise XHCYError(
+            f"图像生成失败：等待超时，已查询 {attempts} 次，最后状态：{last_status}。"
+            "没有拿到图片，本次不会当作成功。"
+        )
 
     def _save_image(self, raw: bytes, index: int) -> tuple[torch.Tensor, str]:
         try:
