@@ -31,12 +31,26 @@ from xhcy_client import (  # noqa: E402
     XHCYClient,
     XHCYError,
     extract_failure_reason,
-    extract_image_urls,
+    extract_image_slots,
     extract_status,
     extract_task_id,
 )
 
 SEP = "-" * 74
+
+
+def _redact_images(payload):
+    """Keep the probe readable when the gateway inlines a multi-megabyte b64_json."""
+    try:
+        text = json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return payload
+    import re
+    text = re.sub(r'"([A-Za-z0-9+/=\n]{80,})"', '"…<base64 已省略>"', text)
+    try:
+        return json.loads(text)
+    except ValueError:
+        return text
 
 
 def show(title: str, payload) -> None:
@@ -48,6 +62,8 @@ def show(title: str, payload) -> None:
 
 
 def run(args) -> int:
+    if args.async_mode:
+        print("提示：--async 已忽略。图像生成固定 POST /v1/images/generations?async=true 后再轮询。")
     client = XHCYClient(args.api_key, args.base_url)
     print(f"服务地址：{client.base_url}")
 
@@ -83,11 +99,8 @@ def run(args) -> int:
             "prompt": args.prompt,
             "size": args.size,
             "n": 1,
-            "response_format": "url",
         }
-        if args.async_mode:
-            payload["async"] = True
-        show(f"{model} 提交用的请求体", payload)
+        show(f"{model} 提交用的请求体（实际还会加上 ?async=true，并去掉 response_format / 不适用的 quality）", payload)
 
         started = time.time()
         try:
@@ -97,14 +110,14 @@ def run(args) -> int:
             failures += 1
             continue
 
-        show(f"{model} 提交后的原始返回", first)
+        show(f"{model} 提交后的原始返回", _redact_images(first))
         status = extract_status(first)
         task_id = extract_task_id(first)
         print(f"解析结果 -> status={status!r} task_id={task_id!r} "
-              f"直出图片={len(extract_image_urls(first))} 张")
+              f"直出图片={len(extract_image_slots(first))} 张")
 
         result = first
-        if not extract_image_urls(first) and status not in STATUS_FAILURE and task_id:
+        if not extract_image_slots(first) and status not in STATUS_FAILURE and task_id:
             for attempt in range(1, args.max_attempts + 1):
                 time.sleep(args.interval)
                 try:
@@ -113,34 +126,39 @@ def run(args) -> int:
                     print(f"  第 {attempt} 次查询出错：{exc}")
                     continue
                 status = extract_status(current)
-                print(f"  第 {attempt} 次查询 -> status={status!r}")
+                print(f"  第 {attempt} 次查询 -> status={status!r} 图片={len(extract_image_slots(current))}")
                 if attempt == 1:
-                    show(f"{model} 轮询返回结构（首个样本）", current)
-                if status in STATUS_SUCCESS or (
-                    status not in STATUS_FAILURE and extract_image_urls(current)
-                ):
-                    result = current
-                    break
+                    show(f"{model} 轮询返回结构（首个样本）", _redact_images(current))
                 if status in STATUS_FAILURE:
                     print(f"  生成失败：{extract_failure_reason(current)}")
+                    break
+                if extract_image_slots(current) or status in STATUS_SUCCESS:
+                    result = current
                     break
             else:
                 print("  轮询次数用尽，未拿到终态")
 
-        urls = extract_image_urls(result)
-        if not urls:
+        slots = extract_image_slots(result)
+        if not slots:
             print("[没有拿到图片]")
             failures += 1
             continue
 
-        for index, url in enumerate(urls, start=1):
+        for index, slot in enumerate(slots, start=1):
+            url = slot.get("url") or ""
+            raw = slot.get("raw")
             try:
-                raw = client.download(url)
+                if isinstance(url, str) and url.startswith("http"):
+                    raw = client.download(url)
+                elif not isinstance(raw, (bytes, bytearray)):
+                    raise XHCYError("这条结果既没有 url 也没有 b64_json")
             except XHCYError as exc:
-                print(f"  下载失败：{exc}")
+                print(f"  读取图片失败：{exc}")
                 failures += 1
                 continue
-            ext = os.path.splitext(url.split("?")[0])[1] or ".png"
+            ext = ".png"
+            if isinstance(url, str) and url.startswith("http"):
+                ext = os.path.splitext(url.split("?")[0])[1] or ".png"
             target = os.path.join(out_dir, f"{model}_{index}{ext}")
             with open(target, "wb") as handle:
                 handle.write(raw)
@@ -168,7 +186,7 @@ def main() -> int:
     parser.add_argument("--interval", type=int, default=3)
     parser.add_argument("--max-attempts", type=int, default=40)
     parser.add_argument("--async", dest="async_mode", action="store_true",
-                        help="发送 async 字段走异步（站点当前禁用，默认同步提交）")
+                        help="已废弃：图像生成固定走 ?async=true 再轮询，此开关不再往请求体写 async")
     args = parser.parse_args()
     if args.model:
         args.models = args.model

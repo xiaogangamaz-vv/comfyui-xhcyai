@@ -216,11 +216,15 @@ nano-banana-2 不支持「16:9 + 1K」。
 | `api_key` | XHCY AI 访问密钥，每个节点单独填 |
 | `aspect_ratio` | `auto` / `1:1` / `2:3` / `3:2` / `16:9` / `9:16`。**能选哪些取决于 `model`**，见上面对照表 |
 | `image_size` | `1K` / `4K`。同样取决于 `model` |
-| `reply_type` | `async` / `sync`。本站禁用了异步图像生成，**选什么都不影响，都会按同步执行** |
+| `reply_type` | `async` / `sync`。控件留给旧工作流；请求固定 `POST /v1/images/generations?async=true` 后再轮询，**不会再发同步长请求** |
 | `max_poll_attempts` / `poll_interval` | 结果查询次数与间隔，默认 300 / 5 |
 | `base_url` | 站点地址，默认 `https://ai.xhcyai.org` |
 
 输出：`image` / `response_text`（摘要）/ `local_image_paths`（落盘路径）。
+
+图像生成走异步提交再轮询，避免同步请求在 Cloudflare 约 100 秒时被 524 掐断。
+`data[]` 里带 `url` 的条目会下载，带 `b64_json` 的条目会解码，两种都会变成图片。
+本家族不传 `quality`，也不传 `response_format`。
 
 > **尺寸能力（2026-10-23 按站点源码补齐）**
 >
