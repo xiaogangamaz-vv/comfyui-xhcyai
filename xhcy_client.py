@@ -40,7 +40,12 @@ _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 300  # image/video generation can genuinely take minutes
 
 STATUS_SUCCESS = {"succeeded", "success", "completed", "complete", "done", "finished"}
-STATUS_FAILURE = {"failed", "failure", "fail", "error", "violation", "cancelled", "canceled"}
+# timeout / timed_out are terminal on the image task API. They must fail the
+# poll immediately, not burn max_poll_attempts and then look like a client wait.
+STATUS_FAILURE = {
+    "failed", "failure", "fail", "error", "violation", "cancelled", "canceled",
+    "timeout", "timed_out",
+}
 
 
 def model_rejects_quality(model: str) -> bool:

@@ -430,6 +430,41 @@ class GeneratePathTests(unittest.TestCase):
                 )
         self.assertIn("upstream rejected", str(caught.exception))
 
+    def test_platform_timeout_status_fails_without_exhausting_polls(self):
+        for status in ("timeout", "timed_out"):
+            with self.subTest(status=status):
+                polls = []
+
+                def request(session, method, url, _polls=polls, _status=status, **req_kwargs):
+                    if method == "POST":
+                        return _Resp({"task_id": "task-timeout", "status": "queued"})
+                    _polls.append(url)
+                    return _Resp(
+                        {
+                            "task_id": "task-timeout",
+                            "status": _status,
+                            "failure_reason": "gateway deadline",
+                        }
+                    )
+
+                with mock.patch.object(requests.Session, "request", request):
+                    with self.assertRaises(XHCYError) as caught:
+                        XHCYNanoBanana().generate(
+                            prompt="a red square",
+                            model="nano-banana-2",
+                            api_key="sk-test",
+                            max_poll_attempts=8,
+                            poll_interval=1,
+                            base_url="https://example.invalid",
+                            aspect_ratio="1:1",
+                            image_size="1K",
+                        )
+                message = str(caught.exception)
+                self.assertIn("生成失败", message)
+                self.assertIn("gateway deadline", message)
+                self.assertNotIn("等待超时", message)
+                self.assertEqual(len(polls), 1, polls)
+
     def test_content_url_is_downloaded_into_an_image(self):
         url = "https://example.invalid/v1/images/tasks/task-c/content"
         result = self._run(
