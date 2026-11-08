@@ -66,6 +66,26 @@ class XHCYError(RuntimeError):
     """Error message safe to show to the end user."""
 
 
+def _payload_mentions(response: requests.Response, needle: str) -> bool:
+    """True when the JSON body contains needle in any nested string (code or message)."""
+    needle = needle.lower()
+    try:
+        payload = response.json()
+    except ValueError:
+        return needle in (response.text or "").lower()
+
+    def walk(node: Any) -> bool:
+        if isinstance(node, str):
+            return needle in node.lower()
+        if isinstance(node, dict):
+            return any(walk(value) for value in node.values())
+        if isinstance(node, list):
+            return any(walk(value) for value in node)
+        return False
+
+    return walk(payload)
+
+
 def _body_message(response: requests.Response) -> str:
     try:
         payload = response.json()
@@ -85,6 +105,15 @@ def _http_error(response: requests.Response, context: str) -> XHCYError:
     code = response.status_code
     detail = _body_message(response)
     suffix = ("：" + detail) if detail else ""
+    if code == 400 and _payload_mentions(response, "async_generation_disabled"):
+        # The gate ignores ?async=true. Body {"async": true} is rejected with this
+        # code when ASYNC_GENERATION_ENABLED is off. Do not retry as a sync call.
+        return XHCYError(
+            "图像异步生成未开启（HTTP 400 async_generation_disabled）。"
+            "请在网关设置环境变量 ASYNC_GENERATION_ENABLED=true 后重启。"
+            "节点不会退回同步请求，否则会再次撞上 Cloudflare 524。"
+            + suffix
+        )
     if code == 400:
         return XHCYError(f"{context}被服务端拒绝（HTTP 400）{suffix}")
     if code == 401:
@@ -236,28 +265,28 @@ class XHCYClient:
         return names
 
     def submit_image(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Submit /v1/images/generations?async=true and return the task envelope.
+        """Submit POST /v1/images/generations with {"async": true} in the JSON body.
 
-        The query flag asks the gateway to hand back a task id instead of holding
-        the connection open until the picture is finished. Synchronous generations
-        are what trip Cloudflare 524 once upstream runs past ~100s. Callers poll
-        with poll_image. A gateway that still inlines the image is fine — the
-        body is returned as-is when data[] is already populated.
+        Platform IsAsyncImageRequest only reads that body field. A query string
+        (?async=true) is ignored, and the call stays synchronous until Cloudflare
+        returns 524. Callers poll with poll_image. A gateway that still inlines
+        data[] is fine — the body is returned as-is.
 
-        response_format is never forwarded, so the gateway can return a url,
-        b64_json, or both. quality is dropped for banana / Gemini image models
-        (HTTP 400 param_not_supported) and when the caller left it at auto.
+        If the gate has ASYNC_GENERATION_ENABLED unset, the response is HTTP 400
+        async_generation_disabled. That error is raised as-is; there is no sync
+        fallback.
+
+        response_format is never forwarded. quality is dropped for banana / Gemini
+        image models (HTTP 400 param_not_supported) and when the caller left it
+        at auto.
         """
         body = dict(payload)
         body.pop("response_format", None)
         quality = str(body.get("quality") or "").strip().lower()
         if not quality or quality == "auto" or model_rejects_quality(str(body.get("model") or "")):
             body.pop("quality", None)
-        return self.post_json(
-            IMAGE_GENERATIONS_PATH + "?async=true",
-            body,
-            "图像生成请求",
-        )
+        body["async"] = True
+        return self.post_json(IMAGE_GENERATIONS_PATH, body, "图像生成请求")
 
     def poll_image(self, task_id: str) -> dict[str, Any]:
         return self.get_json(IMAGE_TASK_PATH.format(task_id=task_id), "图像结果查询")
@@ -345,7 +374,9 @@ def extract_status(payload: dict[str, Any]) -> str:
 # Fields the gateway may use to embed the image bytes instead of linking them.
 # Live /v1/images/generations replies often contain data[].b64_json and no url.
 _B64_FIELDS = ("b64_json", "b64", "base64", "image_base64", "imageBase64")
-_IMAGE_CONTAINER_KEYS = ("data", "results", "result", "output", "images")
+# `content` is the async task envelope: {"content": {"url": "https://.../content"}}.
+# `data` stays for synchronous OpenAI-style data[].url / data[].b64_json.
+_IMAGE_CONTAINER_KEYS = ("data", "results", "result", "output", "images", "content")
 
 
 def _looks_like_image(raw: bytes) -> bool:
@@ -395,10 +426,13 @@ def _http_url(value: Any) -> str | None:
 def extract_image_slots(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Image items in response order.
 
-    Each slot is {"url": str | None, "raw": bytes | None}. A data[] entry with
-    only url and a sibling with only b64_json both show up, in that order.
-    When one entry carries both, both fields are kept so the caller can
-    download the url and fall back to the embedded bytes.
+    Each slot is {"url": str | None, "raw": bytes | None}.
+
+    Sync replies use data[].url and data[].b64_json. Async task replies use
+    content.url (or a nested content object / a bare http content string).
+    A data[] entry with only url and a sibling with only b64_json both show up,
+    in that order. When one entry carries both, both fields are kept so the
+    caller can download the url and fall back to the embedded bytes.
     """
     slots: list[dict[str, Any]] = []
     seen: set[int] = set()
@@ -446,11 +480,15 @@ def extract_image_slots(payload: dict[str, Any]) -> list[dict[str, Any]]:
             for key in _IMAGE_CONTAINER_KEYS
             if isinstance(node.get(key), (list, dict))
         ]
+        content = node.get("content")
+        content_url = _http_url(content) if isinstance(content, str) else None
         url, raw = fields(node)
-        if kids:
+        if kids or content_url:
             before = len(slots)
             for child in kids:
                 walk(child)
+            if content_url:
+                slots.append({"url": content_url, "raw": None})
             if len(slots) == before and (url or raw):
                 slots.append({"url": url, "raw": raw})
             return

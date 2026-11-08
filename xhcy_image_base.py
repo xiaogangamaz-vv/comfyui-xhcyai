@@ -236,8 +236,9 @@ class XHCYImageBase:
     REPLY_TYPES: list[str] = []
     DEFAULT_REPLY_TYPE = "async"
     REPLY_TOOLTIP = (
-        "历史兼容参数。图像生成固定走异步提交（?async=true）再轮询，"
+        "历史兼容参数。图像生成固定在请求体里带 async=true 再轮询，"
         "避免同步长请求被网关 524 掐断。选 sync 也不会改回同步。"
+        "网关需 ASYNC_GENERATION_ENABLED=true，否则会 400 async_generation_disabled。"
     )
     NODE_ID = "xhcy_image_base"
     OUTPUT_PREFIX = "xhcy_image"
@@ -598,13 +599,18 @@ class XHCYImageBase:
             # Multi-reference mode: this is what makes it image-to-image.
             payload["image"] = references
 
-        # submit_image 会改走 ?async=true。同步长请求在负载高时被 Cloudflare 524 掐断。
+        # submit_image 在 JSON 里写 async=true（查询参数会被网关忽略）。
+        # 同步长请求在负载高时被 Cloudflare 524 掐断。
+        # 网关没开 ASYNC_GENERATION_ENABLED 时会 400，这里不改回同步。
         first = client.submit_image(payload)
         result = self._resolve_result(client, first, attempts, interval)
 
         slots = extract_image_slots(result)
         if not slots:
-            raise XHCYError("生成完成，但返回里没有找到图片（没有 url，也没有 b64_json）")
+            raise XHCYError(
+                "图像生成失败：返回里没有找到图片"
+                "（没有 content.url，也没有 data[].url / b64_json）"
+            )
 
         tensors, paths = [], []
         for index, slot in enumerate(slots, start=1):
@@ -707,11 +713,19 @@ class XHCYImageBase:
                 last_status = status
             if status in STATUS_FAILURE:
                 raise XHCYError(f"生成失败：{extract_failure_reason(current) or '服务端未给出原因'}")
+            if status in STATUS_SUCCESS:
+                if extract_image_slots(current):
+                    return current
+                raise XHCYError(
+                    "图像生成失败：任务已结束，但返回里没有图片地址"
+                    "（需要 content.url，或 data[].url / b64_json）"
+                )
             if extract_image_slots(current):
                 return current
-            if status in STATUS_SUCCESS:
-                return current
-        raise XHCYError(f"等待超时，已查询 {attempts} 次，最后状态：{last_status}")
+        raise XHCYError(
+            f"图像生成失败：等待超时，已查询 {attempts} 次，最后状态：{last_status}。"
+            "没有拿到图片，本次不会当作成功。"
+        )
 
     def _save_image(self, raw: bytes, index: int) -> tuple[torch.Tensor, str]:
         try:

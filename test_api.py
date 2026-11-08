@@ -63,7 +63,7 @@ def show(title: str, payload) -> None:
 
 def run(args) -> int:
     if args.async_mode:
-        print("提示：--async 已忽略。图像生成固定 POST /v1/images/generations?async=true 后再轮询。")
+        print("提示：--async 已忽略。图像生成固定在 JSON 里带 async=true 后再轮询。")
     client = XHCYClient(args.api_key, args.base_url)
     print(f"服务地址：{client.base_url}")
 
@@ -100,7 +100,7 @@ def run(args) -> int:
             "size": args.size,
             "n": 1,
         }
-        show(f"{model} 提交用的请求体（实际还会加上 ?async=true，并去掉 response_format / 不适用的 quality）", payload)
+        show(f"{model} 提交用的请求体（实际还会加上 async=true，并去掉 response_format / 不适用的 quality）", payload)
 
         started = time.time()
         try:
@@ -186,7 +186,7 @@ def main() -> int:
     parser.add_argument("--interval", type=int, default=3)
     parser.add_argument("--max-attempts", type=int, default=40)
     parser.add_argument("--async", dest="async_mode", action="store_true",
-                        help="已废弃：图像生成固定走 ?async=true 再轮询，此开关不再往请求体写 async")
+                        help="已废弃：图像生成固定在 JSON 里写 async=true 再轮询")
     args = parser.parse_args()
     if args.model:
         args.models = args.model

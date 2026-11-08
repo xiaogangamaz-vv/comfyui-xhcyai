@@ -101,6 +101,33 @@ class ImageParserTests(unittest.TestCase):
         self.assertIsNone(slots[0]["url"])
         self.assertEqual(slots[0]["raw"], RED)
 
+    def test_async_content_url_is_a_downloadable_slot(self):
+        direct = {
+            "task_id": "task-c",
+            "status": "succeeded",
+            "content": {"url": "https://ai.example/v1/images/content/abc"},
+        }
+        nested = {"data": {"content": {"url": "https://cdn.example/nested.png"}}}
+        bare = {"status": "succeeded", "content": "https://cdn.example/plain.png"}
+
+        slots = extract_image_slots(direct)
+        self.assertEqual(
+            slots,
+            [{"url": "https://ai.example/v1/images/content/abc", "raw": None}],
+        )
+        self.assertEqual(extract_image_slots(nested)[0]["url"], "https://cdn.example/nested.png")
+        self.assertEqual(extract_image_slots(bare)[0]["url"], "https://cdn.example/plain.png")
+
+        # Sync data[] still works beside an async content.url.
+        mixed = {
+            "data": [{"b64_json": RED_B64}],
+            "content": {"url": "https://cdn.example/also.png"},
+        }
+        slots = extract_image_slots(mixed)
+        self.assertEqual(len(slots), 2)
+        self.assertEqual(slots[0]["raw"], RED)
+        self.assertEqual(slots[1]["url"], "https://cdn.example/also.png")
+
     def test_short_token_is_not_an_image_or_a_huge_task_id(self):
         self.assertEqual(extract_image_slots({"data": [{"b64_json": "aGVsbG8"}]}), [])
         from xhcy_client import extract_task_id
@@ -146,7 +173,7 @@ class SubmitContractTests(unittest.TestCase):
         client.submit_image(payload)
         return captured
 
-    def test_async_query_strips_response_format_and_banana_quality(self):
+    def test_async_body_strips_response_format_and_banana_quality(self):
         for model in (
             "nano-banana-2",
             "gemini-2.5-flash-image",
@@ -162,10 +189,11 @@ class SubmitContractTests(unittest.TestCase):
                 }
             )
             self.assertEqual(captured["method"], "POST")
-            self.assertEqual(captured["path"], "/v1/images/generations?async=true")
+            self.assertEqual(captured["path"], "/v1/images/generations")
+            self.assertNotIn("?", captured["path"])
+            self.assertIs(captured["json"]["async"], True)
             self.assertNotIn("response_format", captured["json"])
             self.assertNotIn("quality", captured["json"])
-            self.assertNotIn("async", captured["json"])
 
     def test_gpt_image_26_keeps_quality_but_not_response_format(self):
         captured = self._capture(
@@ -174,11 +202,14 @@ class SubmitContractTests(unittest.TestCase):
                 "prompt": "a cat",
                 "quality": "high",
                 "response_format": "url",
+                "async": False,
             }
         )
         self.assertEqual(captured["json"]["quality"], "high")
+        self.assertIs(captured["json"]["async"], True)
         self.assertNotIn("response_format", captured["json"])
-        self.assertEqual(captured["path"], "/v1/images/generations?async=true")
+        self.assertEqual(captured["path"], "/v1/images/generations")
+        self.assertNotIn("?", captured["path"])
 
     def test_auto_quality_is_omitted(self):
         captured = self._capture(
@@ -228,9 +259,10 @@ class GeneratePathTests(unittest.TestCase):
         def request(session, method, url, **req_kwargs):
             body = req_kwargs.get("json")
             self.calls.append((method, url, body))
+            if method == "GET" and url in downloads:
+                return _Resp(content=downloads[url])
             if method == "GET" and "/v1/images/tasks/" not in url:
-                content = downloads.get(url, b"")
-                return _Resp(content=content)
+                return _Resp(content=downloads.get(url, b""))
             if not queue:
                 raise AssertionError(f"unexpected {method} {url}")
             return _Resp(queue.pop(0))
@@ -267,10 +299,11 @@ class GeneratePathTests(unittest.TestCase):
         self.assertIn("task-b64", result[1])
         post = self.calls[0]
         self.assertEqual(post[0], "POST")
-        self.assertTrue(post[1].endswith("/v1/images/generations?async=true"), post[1])
+        self.assertTrue(post[1].endswith("/v1/images/generations"), post[1])
+        self.assertNotIn("?", post[1])
         self.assertNotIn("response_format", post[2])
         self.assertNotIn("quality", post[2])
-        self.assertNotIn("async", post[2])
+        self.assertIs(post[2]["async"], True)
         self.assertEqual(post[2]["model"], "nano-banana-2")
         self.assertEqual(self.calls[1][0], "GET")
         self.assertTrue(self.calls[1][1].endswith("/v1/images/tasks/task-b64"))
@@ -371,7 +404,10 @@ class GeneratePathTests(unittest.TestCase):
                     aspect_ratio="1:1",
                     image_size="1K",
                 )
-        self.assertIn("等待超时", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("等待超时", message)
+        self.assertIn("失败", message)
+        self.assertNotIn("生成成功", message)
         self.assertEqual(request.n, 3)
 
     def test_terminal_failure_is_not_polled_forever(self):
@@ -393,6 +429,112 @@ class GeneratePathTests(unittest.TestCase):
                     image_size="1K",
                 )
         self.assertIn("upstream rejected", str(caught.exception))
+
+    def test_content_url_is_downloaded_into_an_image(self):
+        url = "https://example.invalid/v1/images/tasks/task-c/content"
+        result = self._run(
+            XHCYNanoBanana(),
+            responses=[
+                {"task_id": "task-c", "status": "queued"},
+                {
+                    "task_id": "task-c",
+                    "status": "succeeded",
+                    "content": {"url": url},
+                },
+            ],
+            downloads={url: RED},
+            model="nano-banana-2",
+            aspect_ratio="1:1",
+            image_size="1K",
+        )
+        self.assertEqual(tuple(result[0].shape), (1, 8, 8, 3))
+        self.assertGreater(float(result[0][0, 0, 0, 0]), 0.9)
+        self.assertIs(self.calls[0][2]["async"], True)
+        self.assertNotIn("?", self.calls[0][1])
+        self.assertEqual(self.calls[1][0], "GET")
+        self.assertTrue(self.calls[1][1].endswith("/v1/images/tasks/task-c"))
+        self.assertEqual(self.calls[2][1], url)
+        self.assertIn("task-c", result[1])
+
+    def test_same_host_content_download_sends_bearer(self):
+        url = "https://example.invalid/v1/images/tasks/task-auth/content"
+        seen = {}
+
+        def request(session, method, url_called, **req_kwargs):
+            if method == "POST":
+                return _Resp({"task_id": "task-auth", "status": "queued"})
+            if "/v1/images/tasks/" in url_called and url_called != url:
+                return _Resp(
+                    {"task_id": "task-auth", "status": "succeeded", "content": {"url": url}}
+                )
+            seen["headers"] = req_kwargs.get("headers")
+            seen["url"] = url_called
+            return _Resp(content=RED)
+
+        with mock.patch.object(requests.Session, "request", request):
+            result = XHCYNanoBanana().generate(
+                prompt="a red square",
+                model="nano-banana-2",
+                api_key="sk-test",
+                max_poll_attempts=2,
+                poll_interval=1,
+                base_url="https://example.invalid",
+                aspect_ratio="1:1",
+                image_size="1K",
+            )
+        self.assertEqual(seen["url"], url)
+        self.assertEqual(seen["headers"]["Authorization"], "Bearer sk-test")
+        self.assertEqual(tuple(result[0].shape), (1, 8, 8, 3))
+
+    def test_async_generation_disabled_is_a_hard_error(self):
+        posts = []
+
+        def request(session, method, url, **req_kwargs):
+            posts.append((method, url, req_kwargs.get("json")))
+            return _Resp(
+                {"error": {"code": "async_generation_disabled", "message": "async off"}},
+                status_code=400,
+            )
+
+        with mock.patch.object(requests.Session, "request", request):
+            with self.assertRaises(XHCYError) as caught:
+                XHCYNanoBanana().generate(
+                    prompt="a red square",
+                    model="nano-banana-2",
+                    api_key="sk-test",
+                    max_poll_attempts=3,
+                    poll_interval=1,
+                    base_url="https://example.invalid",
+                    aspect_ratio="1:1",
+                    image_size="1K",
+                )
+        message = str(caught.exception)
+        self.assertIn("async_generation_disabled", message)
+        self.assertIn("ASYNC_GENERATION_ENABLED", message)
+        self.assertEqual(len(posts), 1)
+        self.assertIs(posts[0][2]["async"], True)
+        self.assertNotIn("?", posts[0][1])
+
+    def test_terminal_success_without_image_is_a_failure(self):
+        def request(session, method, url, **req_kwargs):
+            if method == "POST":
+                return _Resp({"task_id": "task-empty", "status": "queued"})
+            return _Resp({"task_id": "task-empty", "status": "succeeded"})
+
+        with mock.patch.object(requests.Session, "request", request):
+            with self.assertRaises(XHCYError) as caught:
+                XHCYNanoBanana().generate(
+                    prompt="a red square",
+                    model="nano-banana-2",
+                    api_key="sk-test",
+                    max_poll_attempts=3,
+                    poll_interval=1,
+                    base_url="https://example.invalid",
+                    aspect_ratio="1:1",
+                    image_size="1K",
+                )
+        self.assertIn("失败", str(caught.exception))
+        self.assertIn("没有", str(caught.exception))
 
     def test_gpt_image_25_still_sends_quality_gpt26_too_preview_does_not(self):
         done = {"status": "succeeded", "data": [{"b64_json": RED_B64}]}
@@ -429,7 +571,8 @@ class GeneratePathTests(unittest.TestCase):
             quality="medium",
         )
         self.assertEqual(self.calls[0][2]["quality"], "medium")
-        self.assertTrue(self.calls[0][1].endswith("?async=true"))
+        self.assertIs(self.calls[0][2]["async"], True)
+        self.assertNotIn("?", self.calls[0][1])
 
         self.calls.clear()
         self._run(
