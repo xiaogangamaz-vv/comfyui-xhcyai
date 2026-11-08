@@ -9,7 +9,10 @@
 
 from __future__ import annotations
 
-from .xhcy_client import DEFAULT_BASE_URL, XHCYError
+try:
+    from .xhcy_client import DEFAULT_BASE_URL, XHCYError
+except ImportError:  # standalone debugging / unittest
+    from xhcy_client import DEFAULT_BASE_URL, XHCYError  # type: ignore
 
 
 def load_stored_config() -> dict:

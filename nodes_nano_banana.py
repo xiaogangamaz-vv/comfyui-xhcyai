@@ -155,7 +155,7 @@ class XHCYNanoBanana(XHCYImageBase):
     REPLY_TYPES = ["async", "sync"]
     DEFAULT_REPLY_TYPE = "async"
 
-    QUALITIES = []          # 本家族没有画质档
+    QUALITIES = []          # 本家族传 quality 会 HTTP 400 param_not_supported
 
     RETURN_NAMES = ("image", "response_text", "local_image_paths")
 
