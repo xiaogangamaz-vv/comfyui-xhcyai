@@ -1,0 +1,53 @@
+专有许可 / Proprietary License
+
+版权所有 © 2026 xiaogangamaz-vv / XHCY AI。保留所有权利。
+Copyright © 2026 xiaogangamaz-vv / XHCY AI. All Rights Reserved.
+
+本仓库不是开源软件，也不采用 MIT、Apache、GPL、知识共享或其它开放许可。
+This repository is not open-source software. It is not licensed under MIT,
+Apache, GPL, Creative Commons, or any other open license.
+
+1. 版权
+   本仓库中的代码、文档及其它材料，版权归仓库所有者 xiaogangamaz-vv（XHCY AI）所有。
+   所有者保留所有权利。
+
+   Copyright
+   The code, documentation, and other materials in this repository are owned by
+   xiaogangamaz-vv (XHCY AI). All rights are reserved.
+
+2. 允许的使用
+   在遵守本许可以及 https://ai.xhcyai.org 站点条款的前提下，允许个人将本节点用于
+   连接该官方站点并进行合法的 API 调用。
+
+   Permitted use
+   Subject to this license and the terms of https://ai.xhcyai.org, an individual
+   may use these nodes to connect to that official site and make lawful API calls.
+
+3. 禁止的使用
+   未经版权所有者事先书面授权，禁止将本代码或其衍生作品用于：
+   - 商业再分发、出售或再授权；
+   - 作为他人商业产品的一部分，包括免费提供或免费使用。
+
+   Prohibited use
+   Without prior written permission from the copyright owner, you may not use
+   this code or a derivative work for commercial redistribution, sale, or
+   sublicensing, or include it in someone else's commercial product, whether
+   or not a fee is charged.
+
+4. 官方接口
+   使用官方 API 产生的费用、账号与服务条款，以 https://ai.xhcyai.org 当时公布的
+   内容为准。本许可不授予任何官方接口的额度、折扣或账号权利。
+
+   Official API
+   Fees, accounts, and service terms for the official API are those published
+   at https://ai.xhcyai.org. This license does not grant API quota, discounts,
+   or account rights.
+
+5. 不提供担保
+   本软件按「现状」提供。在法律允许的范围内，版权所有者不对使用本软件或官方接口
+   造成的损失承担责任。
+
+   No warranty
+   The software is provided "as is". To the extent permitted by law, the
+   copyright owner is not liable for loss arising from use of the software or
+   the official API.
