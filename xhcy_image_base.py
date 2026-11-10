@@ -613,9 +613,10 @@ class XHCYImageBase:
             )
 
         tensors, paths = [], []
+        task_id = extract_task_id(result) or extract_task_id(first) or ""
         for index, slot in enumerate(slots, start=1):
             check_interrupt()
-            raw = self._bytes_for_slot(client, slot)
+            raw = self._bytes_for_slot(client, slot, task_id)
             tensor, path = self._save_image(raw, index)
             tensors.append(tensor)
             paths.append(path)
@@ -629,7 +630,7 @@ class XHCYImageBase:
             if self.FIXED_SIZE
             else f"画幅：{aspect_ratio} @ {resolution}（{size}）"
         )
-        task_id = extract_task_id(result) or extract_task_id(first) or "-"
+        task_id = task_id or "-"
         note = getattr(self, "_fallback_note", "")
         summary = (
             f"XHCY 生成成功\n"
@@ -650,24 +651,9 @@ class XHCYImageBase:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _bytes_for_slot(client: XHCYClient, slot: dict) -> bytes:
-        """One data[] item -> image bytes. http(s) url is downloaded; b64 is decoded.
-
-        An item that carries both uses the url and falls back to the embedded
-        bytes when the download fails. data: URIs are already decoded into raw.
-        """
-        url = slot.get("url") or ""
-        raw = slot.get("raw")
-        if isinstance(url, str) and (url.startswith("http://") or url.startswith("https://")):
-            try:
-                return client.download(url)
-            except XHCYError:
-                if isinstance(raw, (bytes, bytearray)) and raw:
-                    return bytes(raw)
-                raise
-        if isinstance(raw, (bytes, bytearray)) and raw:
-            return bytes(raw)
-        raise XHCYError("服务端返回的图片字段无法识别")
+    def _bytes_for_slot(client: XHCYClient, slot: dict, task_id: str = "") -> bytes:
+        """One image slot -> bytes. Embedded bytes win; otherwise the gateway is asked first."""
+        return client.image_bytes(slot, task_id)
 
     @staticmethod
     def _resolve_result(client: XHCYClient, first: dict, attempts: int, interval: int) -> dict:

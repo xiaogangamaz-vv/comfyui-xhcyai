@@ -622,5 +622,191 @@ class GeneratePathTests(unittest.TestCase):
         self.assertNotIn("response_format", self.calls[0][2])
 
 
+class GatewayReachabilityTests(unittest.TestCase):
+    def test_embedded_image_is_used_without_calling_another_host(self):
+        foreign = "https://cdn.example/red.png"
+        calls = []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self._output = xhcy_image_base._output_dir
+        xhcy_image_base._output_dir = lambda: tmp.name
+        self.addCleanup(lambda: setattr(xhcy_image_base, "_output_dir", self._output))
+
+        def request(session, method, url, **kwargs):
+            calls.append((method, url))
+            if method == "POST":
+                return _Resp(
+                    {
+                        "id": "task-inline",
+                        "status": "succeeded",
+                        "data": [{"url": foreign, "b64_json": RED_B64}],
+                    }
+                )
+            raise AssertionError(url)
+
+        with mock.patch.object(requests.Session, "request", request):
+            result = XHCYNanoBanana().generate(
+                prompt="a red square",
+                model="nano-banana-2",
+                api_key="sk-test",
+                max_poll_attempts=2,
+                poll_interval=1,
+                base_url="https://example.invalid",
+                aspect_ratio="1:1",
+                image_size="1K",
+            )
+        self.assertEqual(tuple(result[0].shape), (1, 8, 8, 3))
+        self.assertEqual(calls, [("POST", "https://example.invalid/v1/images/generations")])
+
+    def test_foreign_result_url_asks_the_gateway_first(self):
+        foreign = "https://cdn.example/red.png"
+        gateway = "https://example.invalid/v1/images/tasks/task-gw/content"
+        seen = []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self._output = xhcy_image_base._output_dir
+        xhcy_image_base._output_dir = lambda: tmp.name
+        self.addCleanup(lambda: setattr(xhcy_image_base, "_output_dir", self._output))
+
+        def request(session, method, url, **kwargs):
+            seen.append(url)
+            if method == "POST":
+                return _Resp(
+                    {
+                        "id": "task-gw",
+                        "status": "succeeded",
+                        "data": [{"url": foreign}],
+                    }
+                )
+            if url == gateway:
+                return _Resp(content=RED)
+            raise AssertionError(url)
+
+        with mock.patch.object(requests.Session, "request", request):
+            result = XHCYNanoBanana().generate(
+                prompt="a red square",
+                model="nano-banana-2",
+                api_key="sk-test",
+                max_poll_attempts=2,
+                poll_interval=1,
+                base_url="https://example.invalid",
+                aspect_ratio="1:1",
+                image_size="1K",
+            )
+        self.assertEqual(tuple(result[0].shape), (1, 8, 8, 3))
+        self.assertIn(gateway, seen)
+        self.assertNotIn(foreign, seen)
+        self.assertEqual(seen[-1], gateway)
+
+    def test_connect_failure_is_retried_and_read_timeout_is_not(self):
+        import xhcy_client
+
+        client = XHCYClient("sk-test", "https://example.invalid")
+        calls = {"n": 0}
+
+        def handshake(session, method, url, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise requests.ConnectTimeout("handshake")
+            return _Resp({"ok": True})
+
+        with mock.patch.object(requests.Session, "request", handshake), mock.patch.object(
+            xhcy_client, "_CONNECT_RETRY_DELAYS", (0, 0)
+        ), mock.patch.object(xhcy_client, "_environ_proxies", lambda _url: False):
+            response = client._send("POST", "/v1/images/generations", "图像生成请求")
+        self.assertEqual(calls["n"], 3)
+        self.assertEqual(response.json()["ok"], True)
+
+        calls["n"] = 0
+
+        def read_timeout(session, method, url, **kwargs):
+            calls["n"] += 1
+            raise requests.ReadTimeout("read")
+
+        with mock.patch.object(requests.Session, "request", read_timeout):
+            with self.assertRaises(XHCYError) as caught:
+                client._send("POST", "/v1/images/generations", "图像生成请求")
+        self.assertEqual(calls["n"], 1)
+        self.assertIn("超时", str(caught.exception))
+
+        calls["n"] = 0
+
+        def aborted(session, method, url, **kwargs):
+            calls["n"] += 1
+            raise requests.ConnectionError("Connection aborted.")
+
+        with mock.patch.object(requests.Session, "request", aborted):
+            with self.assertRaises(XHCYError):
+                client._send("POST", "/v1/images/generations", "图像生成请求")
+        self.assertEqual(calls["n"], 1)
+
+    def test_stalled_address_does_not_block_a_working_one(self):
+        import socket
+        import threading
+        import time
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        import xhcy_client
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b'{"ok":true}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        started = time.monotonic()
+        sock = xhcy_client.connect_candidates(
+            [
+                (socket.AF_INET, ("192.0.2.1", 81)),
+                (socket.AF_INET, ("127.0.0.1", port)),
+            ],
+            timeout=3,
+        )
+        sock.close()
+        self.assertLess(time.monotonic() - started, 1.5)
+
+        called = {"yes": False}
+        real = xhcy_client.connect_candidates
+
+        def mark(*args, **kwargs):
+            called["yes"] = True
+            return real(*args, **kwargs)
+
+        session = xhcy_client._new_session(False)
+        with mock.patch.object(xhcy_client, "connect_candidates", mark):
+            response = session.get("http://127.0.0.1:%d/v1/models" % port, timeout=(3, 3))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(called["yes"])
+
+    def test_video_and_enhance_urls_stay_on_the_gateway_before_any_other_host(self):
+        client = XHCYClient("sk-test", "https://example.invalid")
+        self.assertEqual(
+            client.artifact_urls("https://cdn.example/clip.mp4", "task-v", "video"),
+            [
+                "https://example.invalid/v1/video/generations/task-v/content",
+                "https://cdn.example/clip.mp4",
+            ],
+        )
+        self.assertEqual(
+            client.artifact_urls(
+                "https://example.invalid/v1/video/enhance/task-e/content",
+                "task-e",
+                "enhance",
+            ),
+            ["https://example.invalid/v1/video/enhance/task-e/content"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
