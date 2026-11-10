@@ -553,8 +553,10 @@ base64 编码会再放大三分之一，整包能到 8 MB 以上——**站点�
 - **素材的角色（role）**：首尾帧用 `first_frame` / `last_frame`，多模态参考用
   `reference_image` / `reference_video` / `reference_audio`，再生成用 `base_video`，
   都以 data URI 放进 `content` 数组。
-- **不信任本地代理**：实测本机 `HTTP_PROXY` 在请求体稍大（带参考素材）时会直接掐断连接并报
-  `ProxyError`，而同一请求直连正常。因此客户端**默认直连**，只有直连失败才回退到环境代理。
+- **网关连接**：图像、视频、文本节点都向配置的网关地址发请求。握手时各地址一起尝试，
+  一条没有回应的地址不会占满整个等待时间；握手失败（请求还没送出）会自动再试。
+  读超时不重复提交，避免同一次生成被记成多次。结果文件优先用网关已经返回的内容，
+  或网关自己的产物地址；只有网关没有文件时才会再访问结果里给出的其它地址。
 - **「视频再生成」与「Context-IR」已经实现**（站点 2026-10 开放）：
   - 再生成 `POST /v1/video/regenerations`，请求体是 `model` + `resolution: "2K"` +
     `duration`（仅用于计费）+ `source_task_id` 或 `content`（含恰好一个 `role=base_video`）。
