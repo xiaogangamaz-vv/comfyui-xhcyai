@@ -293,7 +293,9 @@ class XHCYVideoSuperResolution(XHCYVideoBase):
         if not result_url:
             raise XHCYError("任务已完成，但返回里没有找到视频地址")
 
-        raw = client.download(result_url, max_bytes=MAX_VIDEO_BYTES)
+        raw = client.media_bytes(
+            result_url, task_id=task_id, kind="enhance", max_bytes=MAX_VIDEO_BYTES
+        )
         path = self._save_video(raw, task_id)
 
         fps_text = "保持源帧率" if fps_value == 0 else f"{fps_value} fps"

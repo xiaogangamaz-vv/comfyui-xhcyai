@@ -228,7 +228,7 @@ class XHCYMiniMaxH3Regeneration(XHCYVideoBase):
         if not video_url:
             raise XHCYError("任务已完成，但返回里没有找到视频地址")
 
-        raw = client.download(video_url, max_bytes=MAX_VIDEO_BYTES)
+        raw = client.media_bytes(video_url, task_id=task_id, kind="video", max_bytes=MAX_VIDEO_BYTES)
         path = self._save_video(raw, task_id)
 
         summary = (

@@ -12,10 +12,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
+import socket
+import threading
 import time
 from typing import Any
+from urllib.parse import urljoin
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
+from urllib3.exceptions import ConnectTimeoutError, NameResolutionError, NewConnectionError
 
 DEFAULT_BASE_URL = "https://ai.xhcyai.org"
 
@@ -38,6 +46,19 @@ CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 
 _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 300  # image/video generation can genuinely take minutes
+# Handshake retries only. A failed handshake means the request never left the
+# machine, so repeating it cannot submit the same generation twice.
+_CONNECT_RETRY_DELAYS = (0.4, 1.0)
+# Second address family starts this long after the first, so a stalled route
+# does not consume the whole handshake budget before a working route is tried.
+_FAMILY_STAGGER = 0.25
+
+# When a task result points at another host, ask the gateway for the bytes first.
+_ARTIFACT_PATHS = {
+    "image": "/v1/images/tasks/{task_id}/content",
+    "video": "/v1/video/generations/{task_id}/content",
+    "enhance": "/v1/video/enhance/{task_id}/content",
+}
 
 STATUS_SUCCESS = {"succeeded", "success", "completed", "complete", "done", "finished"}
 # timeout / timed_out are terminal on the image task API. They must fail the
@@ -57,6 +78,212 @@ def model_rejects_quality(model: str) -> bool:
         return True
     # gemini-2.5-flash-image, gemini-3.1-flash-image-preview, and the same shape.
     return "gemini" in name and "image" in name
+
+
+def _origin_of(url: str) -> str:
+    """scheme://host:port, so a same-site content URL is not confused with another host."""
+    parsed = requests.utils.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return "%s://%s:%s" % (parsed.scheme, parsed.hostname.lower(), port)
+
+
+def _resolve_addresses(host: str, port: int) -> list[tuple[int, Any]]:
+    if host.startswith("["):
+        host = host.strip("[]")
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        if parsed.version == 4:
+            return [(socket.AF_INET, (host, port))]
+        return [(socket.AF_INET6, (host, port, 0, 0))]
+    found = []
+    seen = set()
+    for family, _socktype, _proto, _canon, sockaddr in socket.getaddrinfo(
+        host, port, socket.AF_UNSPEC, socket.SOCK_STREAM
+    ):
+        if sockaddr in seen:
+            continue
+        seen.add(sockaddr)
+        found.append((family, sockaddr))
+    return found
+
+
+def connect_candidates(addresses, timeout, socket_options=None, source_address=None):
+    """Open one TCP connection.
+
+    Address families run together, with the second family delayed slightly.
+    The first socket that connects wins. A family that never answers does not
+    have to time out before another family is attempted.
+    """
+    if not addresses:
+        raise OSError("getaddrinfo returned no addresses")
+    if timeout is None or timeout is socket._GLOBAL_DEFAULT_TIMEOUT:
+        budget = float(_CONNECT_TIMEOUT)
+    else:
+        budget = float(timeout)
+    deadline = time.monotonic() + max(budget, 0.1)
+    families = []
+    for family, _sockaddr in addresses:
+        if family not in families:
+            families.append(family)
+    families.sort(key=lambda family: 0 if family == socket.AF_INET else 1)
+
+    winner: dict[str, socket.socket] = {}
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+    done = threading.Event()
+
+    def attempt(family, sockaddr):
+        if done.is_set() or time.monotonic() >= deadline:
+            return
+        remaining = deadline - time.monotonic()
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            if socket_options:
+                for level, option, value in socket_options:
+                    sock.setsockopt(level, option, value)
+            if source_address:
+                sock.bind(source_address)
+            sock.settimeout(max(remaining, 0.05))
+            sock.connect(sockaddr)
+        except OSError as exc:
+            sock.close()
+            with lock:
+                errors.append(exc)
+            return
+        with lock:
+            if done.is_set():
+                sock.close()
+                return
+            winner["sock"] = sock
+            done.set()
+
+    for index, family in enumerate(families):
+        if index and done.wait(min(_FAMILY_STAGGER, max(0.0, deadline - time.monotonic()))):
+            break
+        for family_item, sockaddr in addresses:
+            if family_item != family or done.is_set() or time.monotonic() >= deadline:
+                continue
+            threading.Thread(
+                target=attempt, args=(family_item, sockaddr), daemon=True
+            ).start()
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        done.wait(remaining)
+    sock = winner.get("sock")
+    if sock is not None:
+        return sock
+    if errors:
+        raise errors[-1]
+    raise socket.timeout("timed out")
+
+
+class _RacingHTTPConnection(HTTPConnection):
+    def _new_conn(self) -> socket.socket:
+        host = self._dns_host
+        port = self.port
+        try:
+            addresses = _resolve_addresses(host, int(port))
+            return connect_candidates(
+                addresses, self.timeout, self.socket_options, self.source_address
+            )
+        except socket.gaierror as exc:
+            raise NameResolutionError(self.host, self, exc) from exc
+        except TimeoutError as exc:
+            raise ConnectTimeoutError(
+                self,
+                "Connection to %s timed out. (connect timeout=%s)" % (self.host, self.timeout),
+            ) from exc
+        except OSError as exc:
+            raise NewConnectionError(
+                self, "Failed to establish a new connection: %s" % exc
+            ) from exc
+
+
+class _RacingHTTPSConnection(_RacingHTTPConnection, HTTPSConnection):
+    pass
+
+
+class _RacingHTTPPool(HTTPConnectionPool):
+    ConnectionCls = _RacingHTTPConnection
+
+
+class _RacingHTTPSPool(HTTPSConnectionPool):
+    ConnectionCls = _RacingHTTPSConnection
+
+
+class _GatewayAdapter(HTTPAdapter):
+    """Use the racing handshake for connections this process opens itself."""
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": _RacingHTTPPool,
+            "https": _RacingHTTPSPool,
+        }
+
+
+def _new_session(trust_env: bool) -> requests.Session:
+    session = requests.Session()
+    session.trust_env = trust_env
+    adapter = _GatewayAdapter()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def _environ_proxies(url: str) -> bool:
+    try:
+        return bool(requests.utils.get_environ_proxies(url))
+    except Exception:
+        return False
+
+
+def _request_not_sent(exc: BaseException) -> bool:
+    """True only when the HTTP request cannot have reached the gateway.
+
+    A dropped upload or a read timeout may already have been accepted, and
+    repeating it could record the same generation twice. A handshake that
+    never completed cannot.
+    """
+    if isinstance(exc, requests.ConnectTimeout):
+        return True
+    if isinstance(exc, (requests.ReadTimeout, requests.Timeout)):
+        return False
+    if not isinstance(exc, requests.ConnectionError):
+        return False
+    if isinstance(exc, (requests.exceptions.ChunkedEncodingError, requests.exceptions.SSLError)):
+        return False
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "failed to establish a new connection",
+            "connection refused",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "network is unreachable",
+            "no route to host",
+            "nodename nor servname",
+        )
+    )
+
+
+def _read_body(response: requests.Response, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=256 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise XHCYError("产物超过节点允许的下载上限（%d MiB）" % (max_bytes // (1024 * 1024)))
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def model_supports_quality(model: str) -> bool:
@@ -158,12 +385,10 @@ class XHCYClient:
             raise XHCYError("服务地址必须以 http:// 或 https:// 开头")
         self.api_key = api_key
         self.base_url = base_url
-        # 直连优先：实测本机代理（HTTP_PROXY / HTTPS_PROXY）在请求体稍大时
-        # （例如带参考图、参考视频的请求）会直接掐断连接并报 ProxyError。
-        # 所以默认不走环境代理，只在直连失败时才回退到代理。
-        self._direct = requests.Session()
-        self._direct.trust_env = False
-        self._proxied = requests.Session()
+        # 自己连网关。地址族并行握手，避免一条没有回应的地址占满等待时间。
+        # 不读取进程环境里的出站通道；那条路只在直连握手失败后才作为备用。
+        self._direct = _new_session(trust_env=False)
+        self._proxied = _new_session(trust_env=True)
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -181,22 +406,45 @@ class XHCYClient:
         return payload
 
     def _send(self, method: str, path: str, context: str, note: str = "", **kwargs):
-        """直连优先；直连失败才回退到环境代理，两者都失败才报错。
+        """Call the gateway.
 
-        超时不回退：超时说明已经连上、只是慢，换通道没有意义。
+        A handshake failure is retried: the HTTP request was not sent, so a
+        repeat cannot create a second billed task. A read timeout is not
+        retried, because the gateway may already be working on the request.
         """
         url = path if path.startswith("http") else self.base_url + path
+        sessions = [self._direct]
+        if _environ_proxies(url):
+            sessions.append(self._proxied)
         last_error: Exception | None = None
-        for session in (self._direct, self._proxied):
-            try:
-                return session.request(
-                    method, url, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), **kwargs
-                )
-            except requests.Timeout as exc:
-                raise XHCYError(f"{context}超时{note}") from exc
-            except requests.RequestException as exc:
-                last_error = exc
-                continue
+        for session in sessions:
+            attempts = len(_CONNECT_RETRY_DELAYS) + 1 if session is self._direct else 1
+            try_next_session = False
+            for attempt in range(attempts):
+                try:
+                    return session.request(
+                        method, url, timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT), **kwargs
+                    )
+                except requests.RequestException as exc:
+                    last_error = exc
+                    # Only a handshake that never completed is safe to repeat.
+                    if (
+                        session is self._direct
+                        and _request_not_sent(exc)
+                        and attempt + 1 < attempts
+                    ):
+                        print(
+                            "[XHCY] %s握手未完成，%.1f 秒后重试"
+                            % (context, _CONNECT_RETRY_DELAYS[attempt])
+                        )
+                        time.sleep(_CONNECT_RETRY_DELAYS[attempt])
+                        continue
+                    try_next_session = _request_not_sent(exc)
+                    break
+            if not try_next_session:
+                break
+        if isinstance(last_error, requests.Timeout):
+            raise XHCYError(f"{context}超时{note}") from last_error
         raise XHCYError(f"{context}网络失败，请检查网络后重试") from last_error
 
     # 上游偶发的 502 / 503 / 504（站点原话「服务端暂时不可用」）。
@@ -231,26 +479,112 @@ class XHCYClient:
         return self._request_json("GET", path, context, headers=self._headers)
 
     def download(self, url: str, max_bytes: int = 256 * 1024 * 1024) -> bytes:
-        """Fetch a generated artifact. Video content lives behind our own /v1 path and needs the bearer token; image URLs are public."""
+        """Fetch a generated artifact.
+
+        Same-host redirects stay on the gateway and keep the bearer token.
+        A redirect to any other host is followed once, without the token.
+        Video content on our own /v1 path needs that token; public image URLs do not.
+        """
         if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://")):
             raise XHCYError("服务端返回的产物地址无效")
-        response = self._send(
-            "GET", url, "产物下载", note="，请稍后重试",
-            headers=(self._headers if url.startswith(self.base_url) else None),
-            stream=True,
-        )
-        if response.status_code >= 400:
-            raise _http_error(response, "产物下载")
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in response.iter_content(chunk_size=256 * 1024):
-            if not chunk:
+        current = url
+        left_gateway = False
+        for _hop in range(4):
+            on_gateway = _origin_of(current) == _origin_of(self.base_url)
+            response = self._send(
+                "GET", current, "产物下载", note="，请稍后重试",
+                headers=(self._headers if on_gateway else None),
+                stream=True,
+                allow_redirects=False,
+            )
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = urljoin(current, response.headers.get("Location") or "")
+                closer = getattr(response, "close", None)
+                if closer:
+                    closer()
+                if not location.startswith(("http://", "https://")):
+                    raise XHCYError("产物下载返回了无效的跳转地址")
+                same_site = (
+                    _origin_of(location) == _origin_of(current)
+                    or _origin_of(location) == _origin_of(self.base_url)
+                )
+                if not same_site:
+                    if left_gateway:
+                        raise XHCYError("产物下载被连续转到网关以外的地址，没有直接返回文件")
+                    left_gateway = True
+                current = location
                 continue
-            total += len(chunk)
-            if total > max_bytes:
-                raise XHCYError("产物超过节点允许的下载上限（%d MiB）" % (max_bytes // (1024 * 1024)))
-            chunks.append(chunk)
-        return b"".join(chunks)
+            if response.status_code >= 400:
+                raise _http_error(response, "产物下载")
+            return _read_body(response, max_bytes)
+        raise XHCYError("产物下载跳转次数过多，请稍后重试")
+
+    def artifact_urls(self, url: str, task_id: str = "", kind: str = "image") -> list[str]:
+        """Gateway URL first, any other host after it.
+
+        A result link on another host is only used when the gateway does not
+        serve the bytes itself. Image, video and enhance tasks share this order.
+        """
+        ordered: list[str] = []
+
+        def add(value: str) -> None:
+            if value and value not in ordered:
+                ordered.append(value)
+
+        text = url if isinstance(url, str) else ""
+        on_gateway = bool(text) and _origin_of(text) == _origin_of(self.base_url)
+        if on_gateway:
+            add(text)
+        template = _ARTIFACT_PATHS.get(kind)
+        task = (task_id or "").strip()
+        if task and template and "://" not in task and " " not in task:
+            add(self.base_url + template.format(task_id=task))
+        if text.startswith(("http://", "https://")) and not on_gateway:
+            add(text)
+        return ordered
+
+    def image_bytes(self, slot: dict, task_id: str = "") -> bytes:
+        """Prefer bytes the gateway already returned, then a gateway URL, then any other URL."""
+        raw = slot.get("raw") if isinstance(slot, dict) else None
+        if isinstance(raw, (bytes, bytearray)) and _looks_like_image(bytes(raw)):
+            return bytes(raw)
+        url = ""
+        if isinstance(slot, dict):
+            url = slot.get("url") or ""
+        last: XHCYError | None = None
+        for candidate in self.artifact_urls(url, task_id, "image"):
+            try:
+                data = self.download(candidate)
+            except XHCYError as exc:
+                last = exc
+                continue
+            if _looks_like_image(data):
+                return data
+            last = XHCYError("产物下载返回的内容不是图片")
+        if isinstance(raw, (bytes, bytearray)) and raw:
+            return bytes(raw)
+        if last:
+            raise last
+        raise XHCYError("服务端返回的图片字段无法识别")
+
+    def media_bytes(self, url: str, task_id: str = "", kind: str = "video",
+                    max_bytes: int = 256 * 1024 * 1024) -> bytes:
+        """Download a video-like artifact, asking the gateway before any other host."""
+        last: XHCYError | None = None
+        for candidate in self.artifact_urls(url, task_id, kind):
+            try:
+                data = self.download(candidate, max_bytes=max_bytes)
+            except XHCYError as exc:
+                last = exc
+                continue
+            stripped = data.lstrip()
+            if stripped[:1] in (b"{", b"<"):
+                last = XHCYError("产物下载返回的内容不是媒体文件")
+                continue
+            return data
+        if last:
+            raise last
+        raise XHCYError("服务端返回的产物地址无效")
 
     # ------------------------------------------------------------------ #
     # Convenience wrappers
