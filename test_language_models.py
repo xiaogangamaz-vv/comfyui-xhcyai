@@ -54,10 +54,13 @@ SKILL_NAMES = [
 
 
 class _Batch:
-    ndim = 4
+    def __init__(self, count=1):
+        self.ndim = 4
+        self.count = count
 
     def __iter__(self):
-        yield object()
+        for _ in range(self.count):
+            yield object()
 
 
 class LanguageModelListTests(unittest.TestCase):
@@ -182,6 +185,38 @@ class AnalyzeBehaviorTests(unittest.TestCase):
         self.assertEqual(params, "")
         self.assertIn("原文", analysis)
         self.assertIn("角色：无", status)
+        self.assertNotIn("请按图片出现的顺序理解它们", str(messages))
+
+    def test_no_skill_with_multiple_images_keeps_order_note_only(self):
+        node = XHCYAnalyze()
+        capture = _Capture("没有分段的原文").install(nodes_analyze)
+        nodes_analyze.tensor_to_data_uri = lambda item: "data:image/png;base64,QQ=="
+        node.analyze(
+            "按顺序看",
+            "kimi-k3.1-pro",
+            "无",
+            "k",
+            "不要发明情节",
+            0.6,
+            256,
+            image1=_Batch(2),
+        )
+        messages = capture.payloads[0]["messages"]
+        self.assertEqual([item["role"] for item in messages], ["user"])
+        text = messages[0]["content"][0]["text"]
+        self.assertIn("按顺序看", text)
+        self.assertIn("不要发明情节", text)
+        self.assertIn("请按图片出现的顺序理解它们（Image 1、Image 2 …）。", text)
+        self.assertEqual(
+            [part["type"] for part in messages[0]["content"][1:]],
+            ["image_url", "image_url"],
+        )
+        blob = str(messages)
+        self.assertNotIn("output_contract", blob)
+        self.assertNotIn("【素材】", blob)
+        self.assertNotIn("【额外要求】", blob)
+        self.assertNotIn("你是一名", blob)
+        self.assertNotIn("视觉创作导演", blob)
 
     def test_existing_skill_still_sends_its_methodology(self):
         node = XHCYAnalyze()

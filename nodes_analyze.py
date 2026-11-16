@@ -423,9 +423,14 @@ class XHCYAnalyze:
             )
 
         # ---- 组装请求 ------------------------------------------------ #
+        # 多张图时说明阅读顺序。角色分支写在素材说明里；「无」不套方法论，
+        # 但一次附上多张图或抽帧时仍带上同一句，避免模型打乱 Image 1、Image 2。
+        order_note = "请按图片出现的顺序理解它们（Image 1、Image 2 …）。"
         if spec is None:
             # 「无」：不查角色表，不发送 system / output_contract。
             parts = [requirement]
+            if image_count + frame_count > 1:
+                parts.append(order_note)
             extra = (extra_instruction or "").strip()
             if extra:
                 parts.append(extra)
@@ -437,7 +442,7 @@ class XHCYAnalyze:
                 material_note = (
                     f"\n\n【素材】一共 {image_count + frame_count} 张："
                     f"参考图 {image_count} 张，视频抽帧 {frame_count} 张。"
-                    f"请按图片出现的顺序理解它们（Image 1、Image 2 …）。"
+                    f"{order_note}"
                 )
 
             user_text = requirement + material_note
