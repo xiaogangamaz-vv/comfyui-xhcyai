@@ -1,7 +1,6 @@
-"""Seedance 2.0（火山引擎方舟）的规格表。
+"""Seedance 2.0 的规格表。
 
-数据来源：站点 `/api/video/models` 的返回（2026-10-21 实测），
-以及后端文档 `docs/33-seedance-2-0-ark.md`。
+数据来源：站点 ``/api/video/models``（2026-10-21 核对）。
 
 三个变体
 --------
@@ -9,15 +8,7 @@
     doubao-seedance-2-0-fast   480P / 720P                  4–15 秒
     doubao-seedance-2-0-mini   480P / 720P                  4–15 秒
 
-⚠️ 注意分辨率的写法与 H3 不同：
-    Seedance 用 **720P**（H3 是 768P）、**4K**（H3 是 2K）。
-    别把两套表混用，站点会直接拒。
-
-价格（按输出秒数，2026-10-21 站点公示）
--------------------------------------
-                       480P        720P        1080P       4K
-
-
+分辨率写法和 H3 不同：Seedance 用 720P 与 4K，不要和 H3 的 768P / 2K 混用。
 """
 
 from __future__ import annotations
@@ -74,6 +65,3 @@ PROMPT_MAX_CHARS = 7000
 
 # 首帧/尾帧（IMAGE），与参考素材互斥
 HAS_FRAME_INPUTS = True
-
-
-

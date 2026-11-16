@@ -6,12 +6,6 @@ const NODE_NAMES = new Set([
     LEGACY_NODE_NAME,
 ]);
 
-const COST_LABELS = [
-    "nano-banana-fast",
-    "nano-banana-2",
-    "nano-banana-pro",
-];
-
 const RATIO_VALUES = new Set([
     "auto",
     "1:1",
@@ -32,7 +26,7 @@ const RATIO_VALUES = new Set([
 
 const IMAGE_SIZE_VALUES = new Set(["1K", "2K", "4K"]);
 const REPLY_TYPE_VALUES = new Set(["json", "async", "stream"]);
-const PANEL_HEIGHT = 122;
+const PANEL_HEIGHT = 72;
 const KEY_REFRESH_DELAY_MS = 500;
 const SUCCESS_REFRESH_DELAY_MS = 1200;
 
@@ -60,10 +54,9 @@ function truncateText(ctx, text, maxWidth) {
     return shortened ? `${shortened}\u2026` : "";
 }
 
-function formatAmount(value) {
-    if (typeof value === "string" && value) return value;
+function formatCredits(value) {
     const number = Number(value);
-    return Number.isFinite(number) ? number.toFixed(2) : "-";
+    return Number.isFinite(number) ? String(number) : "-";
 }
 
 function getWidget(node, name) {
@@ -251,47 +244,13 @@ function createBalancePreviewWidget() {
                 ctx.font = "600 14px sans-serif";
                 ctx.fillStyle = "#f0f0f0";
                 ctx.textAlign = "left";
-                ctx.fillText("\u603b\u91d1\u989d", textX, cardY + 29);
+                ctx.fillText("\u8d26\u6237\u79ef\u5206", textX, cardY + 32);
                 ctx.textAlign = "right";
                 ctx.fillText(
-                    `\u00a5${formatAmount(balance.balance)}`,
+                    formatCredits(balance.balance),
                     cardX + cardWidth - 12,
-                    cardY + 29,
+                    cardY + 32,
                 );
-
-                ctx.textAlign = "left";
-                ctx.strokeStyle = "#484848";
-                ctx.beginPath();
-                ctx.moveTo(textX, cardY + 42);
-                ctx.lineTo(cardX + cardWidth - 12, cardY + 42);
-                ctx.stroke();
-
-                const costs = Array.isArray(balance.preview_costs)
-                    ? balance.preview_costs
-                    : [];
-
-                ctx.font = "12px sans-serif";
-                ctx.fillStyle = "#b8b8b8";
-
-                COST_LABELS.forEach((label, index) => {
-                    const amount = formatAmount(costs[index]);
-                    const rowY = cardY + 64 + index * 19;
-
-                    ctx.textAlign = "left";
-                    ctx.fillText(
-                        truncateText(ctx, label, textWidth - 96),
-                        textX,
-                        rowY,
-                    );
-
-                    ctx.textAlign = "right";
-                    ctx.fillText(
-                        `\u00a5${amount} / \u6b21`,
-                        cardX + cardWidth - 12,
-                        rowY,
-                    );
-                });
-
                 ctx.textAlign = "left";
             } else {
                 ctx.font = "11px sans-serif";
@@ -303,11 +262,11 @@ function createBalancePreviewWidget() {
                     truncateText(
                         ctx,
                         node._xinghuoBalanceError ||
-                            "\u7c98\u8d34 API Key \u540e\u81ea\u52a8\u67e5\u8be2\u4f59\u989d",
+                            "\u7c98\u8d34 API Key \u540e\u81ea\u52a8\u67e5\u8be2\u79ef\u5206",
                         textWidth,
                     ),
                     textX,
-                    cardY + 42,
+                    cardY + 28,
                 );
 
                 ctx.fillStyle = "#9a9a9a";
@@ -318,7 +277,7 @@ function createBalancePreviewWidget() {
                         textWidth,
                     ),
                     textX,
-                    cardY + 64,
+                    cardY + 48,
                 );
             }
 

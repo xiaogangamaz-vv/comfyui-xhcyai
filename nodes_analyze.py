@@ -466,14 +466,14 @@ class XHCYAnalyze:
 
         if "authentication failed" in low or "invalid token" in low:
             return (
-                f"模型 {model} 的上游渠道认证失败——站点里该渠道的密钥失效了。\n"
-                f"这不是你的操作问题，需要站点管理员更新该渠道的 key。\n"
+                f"模型 {model} 的上游认证失败。\n"
+                f"这不是你的操作问题，需要站点管理员处理。\n"
                 f"（原始报错：{raw[:120]}）"
             )
         if "is unavailable" in low or "no available channel" in low:
             return (
-                f"模型 {model} 现在没有可用渠道——上游临时不可用或该渠道被停用了。\n"
-                f"可以换一个模型试试，或者等渠道恢复。\n"
+                f"模型 {model} 现在不可用——上游临时不可用或已停用。\n"
+                f"可以换一个模型试试，或者等它恢复。\n"
                 f"（原始报错：{raw[:120]}）"
             )
         if "insufficient" in low or "quota" in low or "403" in low:

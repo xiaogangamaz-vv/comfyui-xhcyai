@@ -1,7 +1,5 @@
 """XHCY AI video node — 视频超分（Video Super-Resolution / 画质增强）。
 
-站点接口（xhcy-one-api-commercial）：
-
     POST /v1/video/enhance
     GET  /v1/video/enhance/{task_id}
     GET  /v1/video/enhance/{task_id}/content
@@ -13,9 +11,6 @@
     也不会把成片公开。这是 ComfyUI 里的推荐接法。
   * ``video_url``：一个公网可匿名访问的视频地址。平台自己的 ``/content`` 地址需要
     Bearer 鉴权，上游拉不到，不能填在这里。
-
-计费按输出秒数 × 档位（分辨率 × tool_version），节点只在状态摘要里说明档位和秒数，
-价格以站点为准。
 """
 
 from __future__ import annotations
@@ -62,17 +57,17 @@ except ImportError:  # allow running this file standalone for debugging
 # 站点上的公开模型名，固定值。
 MODEL = "Video Super-Resolution"
 
-# 与站点 relay/adaptor/mediakit 的售卖集保持一致：
-# 240p/360p/480p/540p/6k/8k 上游合法但平台没有定价行，选不到也就不会被拒。
+# 节点提供的目标分辨率。其余档位不在这里开放。
 RESOLUTIONS = ["720P", "1080P", "2K", "4K"]
 TOOL_VERSIONS = ["standard", "professional"]
 SCENES = ["common", "ugc", "short_series", "aigc", "old_film"]
 BITRATE_LEVELS = ["low", "medium", "high"]
 
-# 站点对源视频时长的售卖区间（用于按秒预留）。
+# 源视频时长允许的范围。
 MIN_SECONDS, MAX_SECONDS = 1, 300
 
-MAX_PRICED_FPS = 30
+# 平台目前只接受不超过 30fps。
+MAX_FPS = 30
 
 
 class XHCYVideoSuperResolution(XHCYVideoBase):
@@ -134,8 +129,7 @@ class XHCYVideoSuperResolution(XHCYVideoBase):
                         "min": MIN_SECONDS,
                         "max": MAX_SECONDS,
                         "tooltip": (
-                            "秒。填**源视频时长**：输出长度跟随源视频，这个值只用于按秒计费。"
-                            "不填对会按错误的秒数预留额度。"
+                            "秒。填源视频时长：输出长度跟随源视频。"
                         ),
                     },
                 ),
@@ -143,6 +137,7 @@ class XHCYVideoSuperResolution(XHCYVideoBase):
                     list(RESOLUTIONS),
                     {
                         "default": "2K",
+                        "tooltip": "目标分辨率。480P/720P 源提升到 2K 是常见用法。",
                     },
                 ),
                 "tool_version": (
@@ -151,6 +146,7 @@ class XHCYVideoSuperResolution(XHCYVideoBase):
                         "default": "standard",
                         "tooltip": (
                             "standard：快，日常分发够用；"
+                            "professional：影视级画质。"
                         ),
                     },
                 ),
@@ -173,7 +169,7 @@ class XHCYVideoSuperResolution(XHCYVideoBase):
                     {
                         "default": 0,
                         "min": 0,
-                        "max": MAX_PRICED_FPS,
+                        "max": MAX_FPS,
                         "tooltip": (
                             "0 = 保持源帧率（不发送该字段）；15～30 可指定。"
                             "平台目前只上架 ≤30fps 档。"
@@ -225,7 +221,7 @@ class XHCYVideoSuperResolution(XHCYVideoBase):
             raise XHCYError(f"不支持的码率档：{bitrate_level}；可选：{'、'.join(BITRATE_LEVELS)}")
 
         seconds = _int_param(duration, "源视频时长（秒）", MIN_SECONDS, MAX_SECONDS)
-        fps_value = _int_param(fps, "目标帧率", 0, MAX_PRICED_FPS)
+        fps_value = _int_param(fps, "目标帧率", 0, MAX_FPS)
         attempts = _int_param(max_poll_attempts, "最大查询次数", 1, 600)
         interval = _int_param(poll_interval, "查询间隔", 1, 60)
 
@@ -300,7 +296,7 @@ class XHCYVideoSuperResolution(XHCYVideoBase):
             f"XHCY 视频超分成功\n"
             f"方式：{mode_text}\n"
             f"模型：{MODEL}\n"
-            f"目标：{resolution} · {tool_version} · {fps_text}\n"
+            f"目标：{resolution} · {tool_version} · {fps_text} · {seconds} 秒{scene_note}\n"
             f"任务：{task_id}\n"
             f"文件：{path}"
         )

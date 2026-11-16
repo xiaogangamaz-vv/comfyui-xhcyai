@@ -18,12 +18,12 @@ import folder_paths
 import comfy.model_management
 from PIL import Image
 try:
-    from .secure_config import (ConfigError, load_config, load_locked_billing,
+    from .secure_config import (ConfigError, load_config,
                                 load_locked_service_origin, load_locked_service_profile)
     from .providers.secure_draw_client import SecureDrawClient
     from .xhcy_client import DEFAULT_BASE_URL
 except ImportError:  # Allows direct test execution outside package loading.
-    from secure_config import (ConfigError, load_config, load_locked_billing,
+    from secure_config import (ConfigError, load_config,
                                load_locked_service_origin, load_locked_service_profile)
     from providers.secure_draw_client import SecureDrawClient
     from xhcy_client import DEFAULT_BASE_URL
@@ -40,7 +40,6 @@ _MAX_TOTAL_BYTES = 50 * 1024 * 1024
 _MODEL_LIST = ["gemini-2.5-flash-image", "nano-banana-2", "nano-banana-pro", "gemini-nano-banana-2.1"]  # aligned with /v1/models; nano-banana-fast is gone upstream
 _IMAGE_SIZE_LIST = ["1K", "2K", "4K"]
 _REPLY_TYPE_LIST = ["json", "async", "stream"]
-_LOCKED_BILLING_DIGEST = ""
 _UPSTREAM_STATUS_TEXT = {
     "input_moderation": "输入违规：提示词或参考图触发内容审核",
     "output_moderation": "输出违规：生成结果触发内容审核",
@@ -69,40 +68,14 @@ def _service_routes() -> dict[str, str]:
     return load_locked_service_profile()["routes"]
 
 
-@lru_cache(maxsize=1)
-def _locked_billing() -> dict[str, dict[str, int | float]]:
-    """Load the fixed portable protected display mapping without source literals."""
-    try:
-        billing = load_locked_billing(_LOCKED_BILLING_DIGEST)
-    except ConfigError as exc:
-        raise RuntimeError("节点计费数据不可用") from exc
-    if set(billing) != set(_MODEL_LIST):
-        raise RuntimeError("节点计费数据模型范围无效")
-
-    normalized: dict[str, dict[str, int | float]] = {}
-    for model in _MODEL_LIST:
-        item = billing.get(model)
-        if not isinstance(item, dict):
-            raise RuntimeError("节点计费数据格式无效")
-        credits, display_amount = item.get("credits"), item.get("display_amount")
-        if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
-            raise RuntimeError("节点计费数据积分无效")
-        if isinstance(display_amount, bool) or not isinstance(display_amount, (int, float)) or display_amount <= 0:
-            raise RuntimeError("节点计费数据金额无效")
-        normalized[model] = {"credits": credits, "display_amount": float(display_amount)}
-    return normalized
-
-
 def query_account_balance(api_key: str = "", model: str = "nano-banana-2") -> dict[str, Any]:
-    """Query credits and apply the user-confirmed local display mapping."""
+    """Query account credits. This plugin does not keep a local price table."""
+    del model
     try:
-        billing_table = _locked_billing()
         config = _provider_config()
         api_key = api_key.strip() or config.get("api_key", "").strip()
         if not api_key:
             return {"success": False, "error": "请填写访问密钥", "balance": 0}
-        billing = billing_table.get(model, billing_table["nano-banana-2"])
-        credit_cost = billing["credits"]
         routes = _service_routes()
         response = requests.post(
             config["base_url"].rstrip("/") + routes["balance"],
@@ -117,14 +90,9 @@ def query_account_balance(api_key: str = "", model: str = "nano-banana-2") -> di
         if not isinstance(data, dict) or data.get("code") != 0:
             return {"success": False, "error": "账户查询失败（服务端拒绝请求）", "balance": 0}
         credits = data.get("data", {}).get("credits")
-        if not isinstance(credits, (int, float)):
+        if isinstance(credits, bool) or not isinstance(credits, (int, float)):
             return {"success": False, "error": "账户响应中未包含有效余额", "balance": 0}
-        complete_calls = int(credits // credit_cost)
-        balance = round(complete_calls * billing["display_amount"], 2)
-        # Keep credits server-side. The browser receives only the approved local display mapping.
-        preview_costs = [billing_table[name]["display_amount"] for name in _MODEL_LIST]
-        return {"success": True, "credits": credits, "balance": balance,
-                "preview_costs": preview_costs}
+        return {"success": True, "credits": credits, "balance": credits}
     except requests.Timeout:
         return {"success": False, "error": "账户查询超时，请稍后重试", "balance": 0}
     except requests.RequestException:
@@ -134,16 +102,12 @@ def query_account_balance(api_key: str = "", model: str = "nano-banana-2") -> di
 
 
 def public_balance_preview(api_key: str = "", model: str = "nano-banana-2") -> dict[str, Any]:
-    """Return the minimal, non-sensitive balance view used by the browser widget."""
+    """Return the minimal balance view used by the browser widget."""
     result = query_account_balance(api_key, model)
     if not result.get("success"):
         # Do not expose remote response text, account credits, URLs, or exception details to the browser.
         return {"success": False, "error": "账户查询失败，请检查访问密钥或网络后重试"}
-    return {
-        "success": True,
-        "balance": result["balance"],
-        "preview_costs": list(result["preview_costs"]),
-    }
+    return {"success": True, "balance": result["balance"]}
 
 
 try:
@@ -536,9 +500,8 @@ class ComfyuiXinghuoNanoBanana:
                  max_poll_attempts, poll_interval, **kwargs):
         """改走站点标准图像接口 /v1/images/generations。
 
-        历史版本调用的是第三方 grsai 的 /v1/draw/* 私有路径，实测在
-        ai.xhcyai.org 上是 404 —— 所以老节点的每一次调用都必然失败。
-        这里直接委托给新的标准实现：老工作流不用换节点 ID 就能恢复。
+        旧的私有绘图路径在本站上不可用。这里直接委托给标准实现，
+        老工作流不用换节点 ID 就能恢复。
         """
         try:
             from .nodes_nano_banana import XHCYNanoBanana

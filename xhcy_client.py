@@ -419,7 +419,7 @@ def _upload_write_timeout_message(context: str) -> str:
     return (
         "%s%s。参考视频会让 JSON 请求体变得很大，上传可能比握手久很多；"
         "这次失败只说明本机在把请求体写出去时超过了等待时间，并不能说明站点已经宕掉。"
-        "请求有可能已经被网关收下并开始计费，请先到任务列表确认，不要立刻再次提交。"
+        "请求有可能已经被网关收下，请先到任务列表确认，不要立刻再次提交。"
         % (context, UPLOAD_WRITE_TIMEOUT_MARK)
     )
 
@@ -435,7 +435,7 @@ def _response_timeout_message(context: str, note: str) -> str:
 def _mid_body_abort_message(context: str) -> str:
     return (
         "%s在上传请求体时连接中断。这不能单独说明站点已经宕掉；"
-        "请求可能已经送到网关并开始计费，请先到任务列表确认，不要立刻再次提交。"
+        "请求可能已经送到网关，请先到任务列表确认，不要立刻再次提交。"
         % context
     )
 
@@ -631,7 +631,7 @@ class XHCYClient:
         raise _failure_from_transport(last_error, context, note) from last_error
 
     # 上游偶发的 502 / 503 / 504（站点原话「服务端暂时不可用」）。
-    # 这类状态码表示请求根本没被处理，重试不会造成重复扣费，所以自动重试几次。
+    # 这类状态码表示请求根本没被处理，所以自动重试几次。
     _RETRYABLE_STATUS = frozenset({502, 503, 504})
     _RETRY_DELAYS = (2.0, 5.0)
 
