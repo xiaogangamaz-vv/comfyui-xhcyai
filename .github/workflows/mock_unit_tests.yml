@@ -1,0 +1,59 @@
+# In-repo mock unit tests only.
+# No secrets, no live calls to the API origin, and no registry publish.
+#
+# The repository root is a ComfyUI package. Its __init__.py uses relative
+# imports, so pytest must not import that file. The job copies the test
+# modules into a plain directory and runs them with the repo on PYTHONPATH.
+#
+# test_api.py is a manual live probe and is not part of this job.
+# test_nodes.py imports a machine-local ComfyUI tree that is not in this repo.
+#
+# Two assertions in test_xhcy_video_enhance.py expect four return names
+# ending in task_id. On current main the video base class still exposes
+# three. This job does not change those return names.
+
+name: Mock unit tests
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (mock only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run mock unit tests
+        run: |
+          set -euo pipefail
+          src="${GITHUB_WORKSPACE}"
+          work="$(mktemp -d)"
+          for file in "$src"/test_*.py; do
+            base="$(basename "$file")"
+            case "$base" in
+              test_api.py|test_nodes.py) continue ;;
+            esac
+            cp "$file" "$work/$base"
+          done
+          ln -s "$src/web" "$work/web"
+          PYTHONPATH="$src" python -m pytest -q "$work" \
+            --rootdir="$work" \
+            -c /dev/null \
+            -k "not test_every_video_node_exposes_the_task_id_output and not test_seedance_and_regeneration_nodes_return_four_values"

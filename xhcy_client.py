@@ -63,6 +63,12 @@ UPLOAD_WRITE_TIMEOUT_MARK = "上传写出超时"
 # Handshake retries only. A failed handshake means the request never left the
 # machine, so repeating it cannot submit the same generation twice.
 _CONNECT_RETRY_DELAYS = (0.4, 1.0)
+# 产物下载的有限重试。轮询已经成功，这里只重复获取同一个地址，不会重新提交生成。
+# 第一次失败后再试 2 次（一共 3 次），间隔 1 秒、2 秒。
+# 只覆盖：HTTP 502/503/504、请求发出前的握手失败、
+# 产物 GET 已经发出后等待响应头超时。
+_DOWNLOAD_RETRY_DELAYS = (1.0, 2.0)
+_DOWNLOAD_RETRY_NOTE = "，请稍后重试下载，不要立刻重新提交生成"
 # Second address family starts this long after the first, so a stalled route
 # does not consume the whole handshake budget before a working route is tried.
 _FAMILY_STAGGER = 0.25
@@ -455,6 +461,44 @@ def _failure_from_transport(exc: BaseException, context: str, note: str) -> XHCY
     return XHCYError("%s网络失败，请检查网络后重试" % context)
 
 
+def _artifact_transport_retryable(exc: BaseException) -> bool:
+    """True when repeating the same artifact GET cannot create a task.
+
+    A handshake that never completed is safe to repeat. So is a read timeout
+    after that GET was already sent: the poll succeeded, and the bytes are
+    fetched again from the same URL. A write timeout or a dropped upload is
+    not an artifact GET, and generation submits do not use this helper.
+    """
+    if _request_not_sent(exc):
+        return True
+    if isinstance(exc, requests.ReadTimeout):
+        return True
+    return isinstance(exc, requests.Timeout) and not isinstance(exc, requests.ConnectTimeout)
+
+
+def _with_download_later(message: str) -> str:
+    """Tell the user to fetch this artifact again, not to submit a new task."""
+    if "不要立刻重新提交生成" in message:
+        return message
+    if message.endswith("。"):
+        return message + "请稍后重试下载，不要立刻重新提交生成"
+    return message + "。请稍后重试下载，不要立刻重新提交生成"
+
+
+def _download_transport_error(exc: BaseException, note: str) -> XHCYError:
+    if _request_not_sent(exc):
+        return XHCYError(
+            "产物下载握手未完成，请检查网络后重试下载，不要立刻重新提交生成"
+        )
+    return XHCYError(_with_download_later(str(_failure_from_transport(exc, "产物下载", note))))
+
+
+def _close_response(response: requests.Response) -> None:
+    closer = getattr(response, "close", None)
+    if closer:
+        closer()
+
+
 def _read_body(response: requests.Response, max_bytes: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
@@ -636,13 +680,28 @@ class XHCYClient:
             raise XHCYError(f"{context}返回格式异常：期望 JSON 对象")
         return payload
 
-    def _send(self, method: str, path: str, context: str, note: str = "", **kwargs):
+    def _send(
+        self,
+        method: str,
+        path: str,
+        context: str,
+        note: str = "",
+        *,
+        single_attempt: bool = False,
+        **kwargs,
+    ):
         """Call the gateway.
 
         A handshake failure is retried: the HTTP request was not sent, so a
         repeat cannot create a second billed task. A write timeout, a mid-body
         abort, and a read timeout are not retried, because the gateway may
         already have accepted the request.
+
+        ``single_attempt`` skips that handshake loop and re-raises the
+        transport error. Artifact download uses it so one budget covers a
+        handshake, a read timeout on that same GET, and HTTP 502/503/504.
+        Generation submits must leave it false. A submit that already left
+        the machine is never repeated here.
         """
         url = path if path.startswith("http") else self.base_url + path
         if kwargs.get("headers") is not None:
@@ -656,7 +715,10 @@ class XHCYClient:
             sessions.append(self._proxied)
         last_error: Exception | None = None
         for session in sessions:
-            attempts = len(_CONNECT_RETRY_DELAYS) + 1 if session is self._direct else 1
+            if single_attempt or session is not self._direct:
+                attempts = 1
+            else:
+                attempts = len(_CONNECT_RETRY_DELAYS) + 1
             try_next_session = False
             for attempt in range(attempts):
                 try:
@@ -666,8 +728,10 @@ class XHCYClient:
                 except requests.RequestException as exc:
                     last_error = exc
                     # Only a handshake that never completed is safe to repeat.
+                    # single_attempt leaves that decision to the caller.
                     if (
-                        session is self._direct
+                        not single_attempt
+                        and session is self._direct
                         and _request_not_sent(exc)
                         and attempt + 1 < attempts
                     ):
@@ -683,6 +747,8 @@ class XHCYClient:
                 break
         if last_error is None:
             raise XHCYError("%s网络失败，请检查网络后重试" % context)
+        if single_attempt:
+            raise last_error
         raise _failure_from_transport(last_error, context, note) from last_error
 
     # 上游偶发的 502 / 503 / 504（站点原话「服务端暂时不可用」）。
@@ -718,35 +784,80 @@ class XHCYClient:
             "GET", path, context, headers=self._headers("GET", json_body=False)
         )
 
+    def _fetch_artifact(self, url: str) -> requests.Response:
+        """GET one artifact URL, retrying only that URL.
+
+        Does not call submit, POST /v1/images/generations, or any other
+        create-task endpoint. A 502/503/504, a handshake that never sent the
+        request, or a read timeout waiting for response headers is tried again
+        after a short backoff. Any other status or transport error stops.
+        """
+        on_gateway = _origin_of(url) == _origin_of(self.base_url)
+        headers = {"Authorization": f"Bearer {self.api_key}"} if on_gateway else None
+        note = _DOWNLOAD_RETRY_NOTE
+        attempts = len(_DOWNLOAD_RETRY_DELAYS) + 1
+        for index in range(attempts):
+            try:
+                response = self._send(
+                    "GET",
+                    url,
+                    "产物下载",
+                    note=note,
+                    single_attempt=True,
+                    # Same-host file GET still needs the bearer token. It has no
+                    # JSON body, so it must not claim Content-Type application/json.
+                    # Accept is left unset: this response is the file itself.
+                    headers=headers,
+                    stream=True,
+                    allow_redirects=False,
+                )
+            except requests.RequestException as exc:
+                if _artifact_transport_retryable(exc) and index + 1 < attempts:
+                    delay = _DOWNLOAD_RETRY_DELAYS[index]
+                    if _request_not_sent(exc):
+                        reason = "握手未完成"
+                    else:
+                        reason = "已发出，但等待网关响应超时"
+                    print("[XHCY] 产物下载%s，%.1f 秒后重试同一地址" % (reason, delay))
+                    time.sleep(delay)
+                    continue
+                raise _download_transport_error(exc, note) from exc
+            if response.status_code in self._RETRYABLE_STATUS:
+                if index + 1 < attempts:
+                    print(
+                        "[XHCY] 产物下载返回 HTTP %d，%.1f 秒后重试同一地址"
+                        % (response.status_code, _DOWNLOAD_RETRY_DELAYS[index])
+                    )
+                    _close_response(response)
+                    time.sleep(_DOWNLOAD_RETRY_DELAYS[index])
+                    continue
+                error = XHCYError(_with_download_later(str(_http_error(response, "产物下载"))))
+                _close_response(response)
+                raise error
+            return response
+        raise XHCYError("产物下载失败。请稍后重试下载，不要立刻重新提交生成")
+
     def download(self, url: str, max_bytes: int = 256 * 1024 * 1024) -> bytes:
         """Fetch a generated artifact.
 
         Same-host redirects stay on the gateway and keep the bearer token.
         A redirect to any other host is followed once, without the token.
         Video content on our own /v1 path needs that token; public image URLs do not.
+
+        The same URL is retried a few times when the gateway is briefly
+        unavailable, the handshake never sent the GET, or the GET was sent
+        and then timed out waiting for response headers. That retry does not
+        submit a new generation.
         """
         if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://")):
             raise XHCYError("服务端返回的产物地址无效")
         current = url
         left_gateway = False
         for _hop in range(4):
-            on_gateway = _origin_of(current) == _origin_of(self.base_url)
-            response = self._send(
-                "GET", current, "产物下载", note="，请稍后重试",
-                # Same-host file GET still needs the bearer token. It has no
-                # JSON body, so it must not claim Content-Type application/json.
-                # Accept is left unset: this response is the file itself.
-                headers=(
-                    {"Authorization": f"Bearer {self.api_key}"} if on_gateway else None
-                ),
-                stream=True,
-                allow_redirects=False,
-            )
+            response = self._fetch_artifact(current)
             if response.status_code in (301, 302, 303, 307, 308):
                 location = urljoin(current, response.headers.get("Location") or "")
-                closer = getattr(response, "close", None)
-                if closer:
-                    closer()
+                _close_response(response)
                 if not location.startswith(("http://", "https://")):
                     raise XHCYError("产物下载返回了无效的跳转地址")
                 same_site = (
@@ -762,7 +873,7 @@ class XHCYClient:
             if response.status_code >= 400:
                 raise _http_error(response, "产物下载")
             return _read_body(response, max_bytes)
-        raise XHCYError("产物下载跳转次数过多，请稍后重试")
+        raise XHCYError("产物下载跳转次数过多，请稍后重试下载，不要立刻重新提交生成")
 
     def artifact_urls(self, url: str, task_id: str = "", kind: str = "image") -> list[str]:
         """Gateway URL first, any other host after it.
@@ -789,7 +900,13 @@ class XHCYClient:
         return ordered
 
     def image_bytes(self, slot: dict, task_id: str = "") -> bytes:
-        """Prefer bytes the gateway already returned, then a gateway URL, then any other URL."""
+        """Prefer bytes the gateway already returned, then a gateway URL, then any other URL.
+
+        The URL list is only what ``artifact_urls`` already has: this task's
+        gateway content address, then links the site response actually
+        included. Download retries that same address. It does not invent a
+        host and it does not submit another generation.
+        """
         raw = slot.get("raw") if isinstance(slot, dict) else None
         if isinstance(raw, (bytes, bytearray)) and _looks_like_image(bytes(raw)):
             return bytes(raw)
