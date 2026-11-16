@@ -1,0 +1,12 @@
+# Tests and local smoke checks. Keep these out of a future publish archive.
+test_*.py
+smoke_enhance_http.py
+
+# Bytecode, caches, and local probe output.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+probe_out/
+
+# Version control metadata.
+.git/
