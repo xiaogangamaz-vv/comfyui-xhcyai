@@ -45,6 +45,7 @@ try:
         DEFAULT_BASE_URL,
         STATUS_FAILURE,
         STATUS_SUCCESS,
+        UPLOAD_WRITE_TIMEOUT_MARK,
         XHCYClient,
         XHCYError,
         extract_failure_reason,
@@ -57,6 +58,7 @@ except ImportError:  # allow running this file standalone for debugging
         DEFAULT_BASE_URL,
         STATUS_FAILURE,
         STATUS_SUCCESS,
+        UPLOAD_WRITE_TIMEOUT_MARK,
         XHCYClient,
         XHCYError,
         extract_failure_reason,
@@ -730,8 +732,14 @@ class XHCYVideoBase:
     @classmethod
     def _recover_after_gateway_timeout(cls, client: XHCYClient, model: str,
                                        started_at: float, exc: Exception) -> dict:
-        message = str(exc).lower()
-        if not any(hint in message for hint in cls._TIMEOUT_HINTS):
+        message = str(exc)
+        # 上传写出超时不是 Cloudflare 524。请求体可能已经进了网关，
+        # 再按「超时」去任务列表里捞一条同模型任务，或提示用户立刻重提，
+        # 都可能变成第二次计费。保持原来的上传错误，不再提交。
+        if UPLOAD_WRITE_TIMEOUT_MARK in message:
+            raise exc
+        lowered = message.lower()
+        if not any(hint in lowered for hint in cls._TIMEOUT_HINTS):
             raise exc
 
         print("[XHCY] 提交遇到网关超时，正在任务列表里查找可能已创建的任务…")

@@ -235,6 +235,73 @@ class VideoSuperResolutionNodeTest(unittest.TestCase):
             enhance.NODE_DISPLAY_NAME_MAPPINGS["xhcy_video_enhance"],
         )
 
+    def test_upload_write_timeout_is_not_recovered_into_another_submit(self):
+        import time
+
+        import requests
+        import urllib3.exceptions
+
+        client = xhcy_client.XHCYClient("key", "https://api.example.test")
+        calls = []
+
+        def write_timeout(session, method, url, **kwargs):
+            calls.append(session)
+            timeout = TimeoutError("The write operation timed out")
+            protocol = urllib3.exceptions.ProtocolError("Connection aborted.", timeout)
+            try:
+                raise protocol
+            except urllib3.exceptions.ProtocolError as protocol_error:
+                raise requests.ConnectionError(protocol_error)
+
+        with mock.patch.object(requests.Session, "request", write_timeout), mock.patch.object(
+            xhcy_client, "_environ_proxies", lambda _url: True
+        ):
+            with self.assertRaises(xhcy_client.XHCYError) as caught:
+                client.submit_video({"model": "MiniMax-H3", "content": []})
+        self.assertEqual(calls, [client._direct])
+        self.assertIn(xhcy_client.UPLOAD_WRITE_TIMEOUT_MARK, str(caught.exception))
+
+        listing = mock.Mock()
+
+        def fail_if_slept(*_args, **_kwargs):
+            raise AssertionError("upload write timeout must not enter gateway recovery")
+
+        with mock.patch.object(xhcy_video_base, "sleep_interruptible", fail_if_slept):
+            with self.assertRaises(xhcy_client.XHCYError) as recovered:
+                xhcy_video_base.XHCYVideoBase._recover_after_gateway_timeout(
+                    listing, "MiniMax-H3", time.time(), caught.exception
+                )
+        self.assertIs(recovered.exception, caught.exception)
+        listing.list_video_tasks.assert_not_called()
+        listing.submit_video.assert_not_called()
+
+    def test_gateway_response_timeout_still_looks_up_the_task_without_resubmitting(self):
+        import time
+
+        client = mock.Mock()
+        client.list_video_tasks.return_value = {
+            "items": [
+                {
+                    "model": "MiniMax-H3",
+                    "created_at": time.time(),
+                    "task_id": "task-recovered",
+                    "status": "queued",
+                }
+            ]
+        }
+        with mock.patch.object(xhcy_video_base, "sleep_interruptible", lambda *_a, **_k: None), mock.patch.object(
+            xhcy_video_base, "check_interrupt", lambda: None
+        ):
+            found = xhcy_video_base.XHCYVideoBase._recover_after_gateway_timeout(
+                client,
+                "MiniMax-H3",
+                time.time(),
+                xhcy_client.XHCYError("视频生成请求已发出，但等待网关响应超时"),
+            )
+        self.assertEqual(found["task_id"], "task-recovered")
+        client.list_video_tasks.assert_called()
+        client.submit_video.assert_not_called()
+
     def test_seedance_and_regeneration_nodes_return_four_values(self):
         import nodes_minimax_h3_regen  # noqa: E402
         import nodes_seedance  # noqa: E402
