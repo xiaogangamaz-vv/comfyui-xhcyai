@@ -2,4 +2,12 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 probe_out/
-xinghuo.secure.dpapi
+
+# Local DPAPI blobs and key files. Do not commit them.
+*.dpapi
+*.billing.lock
+xinghuo.billing.lock
+*.pem
+*.key
+*.p12
+*.pfx

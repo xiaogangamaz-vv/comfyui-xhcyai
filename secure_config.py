@@ -1,14 +1,11 @@
-"""Local credential storage and portable protected node metadata.
+"""Local credential storage.
 
-Optional credentials use Windows DPAPI and never enter a workflow. The fixed
-billing profile is stored in a portable protected blob, so copying the node
-does not bind it to a Windows account or machine.
+Optional credentials use Windows DPAPI and never enter a workflow.
 """
 
 import base64
 import ctypes
 import getpass
-import hashlib
 import json
 from ctypes import wintypes
 from functools import lru_cache
@@ -20,8 +17,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 CONFIG_FILE = Path(__file__).with_name("xinghuo.secure.dpapi")
-BILLING_FILE = Path(__file__).with_name("xinghuo.billing.lock")
-_BILLING_NONCE_SIZE = 16
 _SERVICE_PROFILE_NONCE = "EvrGpZ4o0nPp14h6"
 _SERVICE_PROFILE_CIPHERTEXT = (
     "fLmjPruiFvBYIKUGEH2H6XE0hEZulNyrlZjqxLbnYn7ypm8xTnnpx5gLCAYTgxNzd7ftV_Mol6ClCm5Re7E69Yb_-"
@@ -144,45 +139,6 @@ def load_config() -> dict:
     if not isinstance(config.get("base_url"), str) or not isinstance(config.get("api_key"), str) or not isinstance(config.get("profiles"), dict):
         raise ConfigError("XINGHUO 加密配置缺少必需字段")
     return config
-
-
-def _portable_billing_transform(data: bytes, nonce: bytes) -> bytes:
-    """Apply the portable at-rest protection used by the fixed billing blob."""
-    material = (base64.b64decode("eGluZ2h1by1uYW5vLWJhbmFuYS1wcm90ZWN0") +
-                base64.b64decode("ZWQtYmlsbGluZy1tYXBwaW5n"))
-    seed = hashlib.sha256(material + nonce).digest()
-    stream = bytearray()
-    for counter in range((len(data) + 31) // 32):
-        stream.extend(hashlib.sha256(seed + counter.to_bytes(4, "big")).digest())
-    return bytes(value ^ stream[index] for index, value in enumerate(data))
-
-
-def write_locked_billing(billing: dict) -> None:
-    """Write portable protected billing data; retained for controlled packaging."""
-    if not isinstance(billing, dict):
-        raise ConfigError("计费映射格式无效")
-    payload = json.dumps(billing, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    nonce = b"XHNB-v1-portable"
-    BILLING_FILE.write_bytes(base64.urlsafe_b64encode(nonce + _portable_billing_transform(payload, nonce)))
-
-
-def load_locked_billing(expected_digest: str) -> dict:
-    """Load portable protected billing data and verify its fixed fingerprint."""
-    if not BILLING_FILE.is_file():
-        raise ConfigError("节点计费数据缺失")
-    try:
-        protected = base64.urlsafe_b64decode(BILLING_FILE.read_bytes())
-        if len(protected) <= _BILLING_NONCE_SIZE:
-            raise ValueError("billing data is empty")
-        nonce, ciphertext = protected[:_BILLING_NONCE_SIZE], protected[_BILLING_NONCE_SIZE:]
-        payload = _portable_billing_transform(ciphertext, nonce)
-        actual_digest = hashlib.sha256(payload).hexdigest()
-        billing = json.loads(payload.decode("utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise ConfigError("节点计费数据无效或已损坏") from exc
-    if actual_digest != expected_digest or not isinstance(billing, dict):
-        raise ConfigError("节点计费数据校验失败")
-    return billing
 
 
 def configure_interactively():

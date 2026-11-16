@@ -276,7 +276,7 @@ class XHCYImageBase:
                     {
                         "multiline": True,
                         "default": "",
-                        "tooltip": "提示词。留空会直接报错，不会白白扣费。",
+                        "tooltip": "提示词。留空会直接报错，不会发出请求。",
                     },
                 ),
                 "model": (
@@ -670,8 +670,7 @@ class XHCYImageBase:
             hint = ""
             if isinstance(first.get("data"), list) and not first.get("data"):
                 hint = (
-                    "服务端返回了空的图片列表（这一单在平台侧可能已经计费，"
-                    "需要去后台核对这笔请求是否要退款）；"
+                    "服务端返回了空的图片列表，请到站点任务列表核对这一单；"
                 )
             raise XHCYError(
                 "服务端既没直接返回图片，也没返回任务 ID。"

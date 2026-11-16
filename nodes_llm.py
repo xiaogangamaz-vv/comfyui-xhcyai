@@ -39,12 +39,12 @@ except ImportError:  # allow running this file standalone for debugging
 # 站点当前公开的文本模型（GET /api/public-models，2026-10-23 核对）
 #
 # 已剔除 MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat：
-# 这三个挂在只做视频的 metaso 渠道上，站点也不再对外公开，调文本会失败。
+# 这三个不再作为文本模型公开，调文本会失败。
 # 2026-11-02 按 GET https://ai.xhcyai.org/v1/models 的真实清单重排。
 # 已移除：gemini-3-flash / gemini-3.1-pro —— 站点上已经没有这两个，
 # 选了只会报「no available channel」。
 # 也已移除 MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat：
-# 2026-11-02 实测调文本返回 HTTP 404（它们挂在只做视频的渠道上）。
+# 2026-11-02 实测调文本返回 HTTP 404。
 MODEL_LIST = [
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -85,7 +85,7 @@ class XHCYChat:
                     {
                         "multiline": True,
                         "default": "",
-                        "tooltip": "你要问模型的内容。留空会直接报错，不会白白扣费。",
+                        "tooltip": "你要问模型的内容。留空会直接报错，不会发出请求。",
                     },
                 ),
                 "model": (

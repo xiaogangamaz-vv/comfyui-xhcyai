@@ -42,7 +42,7 @@ class XHCYMiniMaxH3Frames(XHCYVideoBase):
     DEFAULT_RESOLUTION = _DEFAULT_RESOLUTION
     DEFAULT_DURATION = _DEFAULT_DURATION
     DEFAULT_RATIO = _DEFAULT_RATIO
-    PROMPT_TOOLTIP = "描述画面怎么动起来。留空会直接报错，不会白白扣费。"
+    PROMPT_TOOLTIP = "描述画面怎么动起来。留空会直接报错，不会发出请求。"
     NODE_ID = "xhcy_minimax_h3_frames"
     OUTPUT_PREFIX = "xhcy_h3_frames"
     CATEGORY = "XHCY/Video"

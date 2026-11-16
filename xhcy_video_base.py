@@ -80,11 +80,9 @@ except ImportError:  # standalone debugging
 # material means a giant request that can blow through the gateway timeout.
 # ---------------------------------------------------------------------- #
 
-# 2026-10-18：站点提交视频时是「同步等上游建任务」，而它自己的 HTTP 客户端在
-# RelayTimeout 未配置时根本没有超时（common/client/init.go），于是 Cloudflare
-# 会在 100 秒时返回 524，而站点还在后台继续等。素材越大，上游建任务越慢，
-# 越容易撞这道墙 —— 所以把上限和压缩比都收紧，宁可少一点细节，也别让整次
-# 生成白等 100 秒。
+# 2026-10-18：站点提交视频时会同步等上游建任务。网关大约只等 100 秒，
+# 超时返回 524，而站点还可能在后台继续等。素材越大，上游建任务越慢。
+# 参考图只在超过长边限制时才缩放。
 # 参考素材尽量不降质：只有在超过 2560 长边时才缩放，JPEG 质量 95（肉眼几乎
 # 无损）。实测上传不是瓶颈（6 MB 上传 0.84 秒），所以压素材对「提交超时」帮助
 # 很小 —— 那 100 秒耗在站点转发上游建任务上，不在上传上。
@@ -99,8 +97,8 @@ MAX_MATERIAL_TOTAL = 60 * 1024 * 1024      # 整个请求，base64 后约 80 MB
 #   media duration must be between 2 and 15.5 seconds
 REF_VIDEO_MIN_SECONDS = 2.0
 REF_VIDEO_MAX_SECONDS = 15.5
-# 另一条限制看的是**合计**，不是单段（实测报错原文，提交之后才回来，
-# 那时已经白扣了一次费用）：reference video total duration must not exceed 15 seconds
+# 另一条限制看的是合计，不是单段（提交之后才返回拒绝）：
+# reference video total duration must not exceed 15 seconds
 REF_VIDEO_TOTAL_SECONDS = 15.0
 # 上游对参考视频的分辨率有下限，低于 480p 会被直接拒（实测报错原文：
 # "The video resolution is too low ... The minimum resolution requirement is 480p"）。
@@ -297,7 +295,7 @@ def video_duration(video) -> float | None:
 def check_reference_video_total(videos) -> None:
     """参考视频的时长是按**合计**校验的：单段 2～15.5 秒，几段加起来不能超 15 秒。
 
-    上游提交成功之后才回这条拒绝，一次白扣费用，所以先在本机拦掉。
+    上游要等提交之后才回这条拒绝，所以先在本机拦掉。
     """
     durations = [value for value in map(video_duration, videos) if value is not None]
     total = sum(durations)
@@ -458,7 +456,7 @@ class XHCYVideoBase:
     DEFAULT_RATIO = "16:9"
     RESOLUTIONS: list[str] = ["480P", "768P", "1080P", "2K"]
     RATIOS: list[str] = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
-    PROMPT_TOOLTIP = "视频描述（提示词）。留空会直接报错，不会白白扣费。"
+    PROMPT_TOOLTIP = "视频描述（提示词）。留空会直接报错，不会发出请求。"
     NODE_ID = "xhcy_video_base"
     OUTPUT_PREFIX = "xhcy_video"
     CATEGORY = "XHCY/Video"
@@ -530,7 +528,7 @@ class XHCYVideoBase:
                         "default": cls.DEFAULT_DURATION,
                         "min": 1,
                         "max": 60,
-                        "tooltip": "时长（秒），按秒计费。超出所选模型范围时会自动收进合法区间并提示。",
+                        "tooltip": "时长（秒）。超出所选模型范围时会自动收进合法区间并提示。",
                     },
                 ),
                 "ratio": (
@@ -723,19 +721,17 @@ class XHCYVideoBase:
         except Exception:
             return None
 
-    # 站点提交视频时是同步等上游建任务，而它自己的 HTTP 客户端在 RelayTimeout
-    # 未配置时没有超时（common/client/init.go）；Cloudflare 只等 100 秒就返回
-    # 524，可站点往往还在后台继续建任务。与其让整次生成白跑，不如回任务列表
-    # 把它捞回来 —— 列表按密钥隔离，加上时间窗口和模型名双重匹配。
+    # 网关大约只等 100 秒，超时会返回 524，任务可能仍在后台继续。
+    # 这时回任务列表把可能已建好的任务找回来。列表按密钥隔离，再加上时间窗口和模型名。
     _TIMEOUT_HINTS = ("http 524", "超时", "timeout", "timed out")
 
     @classmethod
     def _recover_after_gateway_timeout(cls, client: XHCYClient, model: str,
                                        started_at: float, exc: Exception) -> dict:
         message = str(exc)
-        # 上传写出超时不是 Cloudflare 524。请求体可能已经进了网关，
-        # 再按「超时」去任务列表里捞一条同模型任务，或提示用户立刻重提，
-        # 都可能变成第二次计费。保持原来的上传错误，不再提交。
+        # 上传写出超时不是网关 524。请求体可能已经进了网关，
+        # 再去任务列表里捞一条同模型任务，或提示用户立刻重提，都可能重复提交。
+        # 保持原来的上传错误，不再提交。
         if UPLOAD_WRITE_TIMEOUT_MARK in message:
             raise exc
         lowered = message.lower()
@@ -802,7 +798,7 @@ class XHCYVideoBase:
                 return current
         if last_status == "submitted":
             # 站点已经收下请求，但上游还没建出任务。这是上游排队或临时故障
-            # （实测上游 metaso 会直接回 502 Bad Gateway），不是请求本身有问题。
+            # （实测上游会直接回 502 Bad Gateway），不是请求本身有问题。
             # 说清楚比只报「等待超时」有用：用户知道该等、该重试，而不是改素材。
             raise XHCYError(
                 "等待超时（已查询 %d 次）。任务一直停在「已提交」：站点已经收到请求，"

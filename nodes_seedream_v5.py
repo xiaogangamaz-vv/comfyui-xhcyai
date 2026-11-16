@@ -7,13 +7,9 @@
     * 图层拆分变体        -> 必须**恰好**接 1 张图，输出 1 张底图 + 最多 16 个图层
 
 参数来源（不是猜的）：
-    1. 站点 ``/api/model_provider_meta`` 的 usage 字段 —— 给出各变体的能力与档位；
-    2. 随站点一起分发的官方节点 ``comfyui-xinghuo-seedream/nodes.py``
-       —— 里面就是这套 ``比例 + 档位 -> 像素`` 的映射表，本文件照抄其
-       ``_SIZE_MAP_PRO``（1K / 1.5K / 2K，8 种画幅）；
-    3. 站点后端源码 ``relay/billing/ratio/image.go`` —— 确认 size 传的是**像素**
-       （``seedreamSizePixels`` 同时认 "1k"/"1.5k"/"2k" 与 "2048x2048" 这类写法，
-       而 capability 策略把该家族标为 UnvalidatedPassThrough，即原样透传上游）。
+    1. 站点公开的模型能力说明 —— 各变体的档位与参考图上限；
+    2. 官方节点里的 ``比例 + 档位 -> 像素`` 映射（1K / 1.5K / 2K，8 种画幅）。
+size 传的是像素，该家族按原样交给上游。
 
 变体差异：
 
@@ -78,7 +74,7 @@ class XHCYSeedreamV5(XHCYImageBase):
     VARIANT_MODELS = list(_ALL_VARIANTS)
 
     MODEL_TOOLTIP = (
-        "同一家族的变体。flash 单价更低；pro 偏向细节与像素级重绘。"
+        "同一家族的变体。flash 更快；pro 偏向细节与像素级重绘。"
         "带 /layer-decomposition 后缀的两个变体是**图层拆分**："
         "必须且只需接 1 张图，输出 1 张底图加最多 16 个图层。"
     )
