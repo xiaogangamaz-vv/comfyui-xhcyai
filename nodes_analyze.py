@@ -52,40 +52,57 @@ except ImportError:  # allow running this file standalone for debugging
     from xhcy_frames import video_to_frames  # type: ignore
     from xhcy_image_base import tensor_to_data_uri  # type: ignore
     from xhcy_v3 import as_v3_node  # type: ignore
+    from xhcy_credentials import resolve_credentials  # type: ignore
 
 
 # ---------------------------------------------------------------------- #
 # 模型清单
 # ---------------------------------------------------------------------- #
 
-# 站点当前登记的文本模型。是否支持看图按公开常识标注，
-# 实际以站点渠道为准；选错时节点会用人话报错而不是把失败藏起来。
+# 语言模型下拉已于 2026-11-16 按
+# GET https://ai.xhcyai.org/api/public-models 同步。
+# 智能分析只保留公开清单里确认能看图的三个模型，并标为 vision。
+# 标注依据模型的公开输入能力，站点清单是最终依据。
+# deepseek 四个对话模型的看图能力尚未确认，不放进这个节点。
 #
-# ⚠️ 2026-10-21 实测（从生产机线路，避免本机 Cloudflare 拦截）：
-#   可用：gemini-3-flash / claude-fable-5 / claude-fable-5-1 /
-#         claude-opus-5-5 / gpt-6.1-sol
-#   不可用：gemini-3.8-flash、gemini-3.1-pro（渠道不可用）、
-#           deepseek-v4.1-flash（渠道不可用）、
-#           MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat（请求失败）
-# 按「下拉里只放真正能用的选项」的原则，这里只列实测通过的。
-# ⚠️ 2026-11-02 复测（本机直连 ai.xhcyai.org）：
-#   gemini-3-flash 已经从站点 /v1/models 下线，选了直接报「未知的模型」，
-#   所以默认换成 gemini-3.8-flash（实测返回正常）。
+# 已不再发布的模型仍以原始 ID 留在下拉值里，避免旧工作流被改成别的模型。
+# 界面把它们标成「不可用，请重选」；运行时要求重新选择当前模型。
 MODEL_CAPABILITY = {
     "gemini-3.8-flash": "vision",
-    "claude-fable-5": "vision",
-    "claude-fable-5-1": "vision",
-    "claude-opus-5-5": "vision",
     "gpt-6.1-sol": "vision",
+    "kimi-k3.1-pro": "vision",
 }
 
 MODEL_LIST = list(MODEL_CAPABILITY.keys())
 DEFAULT_MODEL = "gemini-3.8-flash"
 
-# 站点若临时不可用，可用这里的顺序做降级提示
+# 值必须是原始 ID。不要把显示文案写进这里，否则 ComfyUI 会对不上已保存的值。
+DELISTED_MODEL_IDS = (
+    "claude-fable-5",
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+)
+
+
+def model_combo_values() -> list[str]:
+    values = list(MODEL_LIST)
+    for model_id in DELISTED_MODEL_IDS:
+        if model_id not in values:
+            values.append(model_id)
+    return values
+
+
+def unavailable_model_message(model, current_ids) -> str:
+    name = model if isinstance(model, str) and model.strip() else "（空）"
+    return (
+        f"模型「{name}」已不在当前可用清单中，请重新选择一个当前模型。\n"
+        f"当前可用：{' / '.join(current_ids)}"
+    )
+
+
 VISION_HINT = (
-    "只有视觉模型能看图。下面列的都是实测可用的视觉模型，"
-    "接了素材会按多模态消息发送。"
+    "只有视觉模型能看图。不在当前清单里的模型会保留原来的 ID，"
+    "运行前请改选一个当前模型。"
 )
 
 # 报错时列给用户看的可选视觉模型
@@ -222,7 +239,10 @@ SKILLS: dict[str, dict] = {
     },
 }
 
-SKILL_LIST = list(SKILLS.keys())
+# 「无」不是角色，不写入 SKILLS。选它时不套用任何方法论。
+# 默认仍是「通用创意助手」，已保存的工作流继续用原来的角色。
+NO_SKILL = "无"
+SKILL_LIST = [NO_SKILL, *SKILLS.keys()]
 DEFAULT_SKILL = "通用创意助手"
 
 
@@ -273,17 +293,20 @@ class XHCYAnalyze:
                     },
                 ),
                 "model": (
-                    list(MODEL_LIST),
+                    model_combo_values(),
                     {
                         "default": DEFAULT_MODEL,
-                        "tooltip": f"站点上的文本/多模态模型。{VISION_HINT}",
+                        "tooltip": f"站点上的视觉模型。{VISION_HINT}",
                     },
                 ),
                 "skill": (
                     list(SKILL_LIST),
                     {
                         "default": DEFAULT_SKILL,
-                        "tooltip": "角色说明书，决定模型用什么方法论产出什么。",
+                        "tooltip": (
+                            "角色说明书，决定模型用什么方法论产出什么。"
+                            "选「无」则不套用角色，只把需求、额外要求和素材发给模型。"
+                        ),
                     },
                 ),
                 "api_key": (
@@ -334,6 +357,12 @@ class XHCYAnalyze:
             "optional": optional,
         }
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, model):
+        # 收下任意已保存的模型 ID，避免校验阶段把它判掉或换成默认值。
+        # 不在当前清单里的 ID 由 analyze() 用中文要求重选。
+        return True
+
     # ------------------------------------------------------------------ #
 
     def analyze(self, requirement, model, skill, api_key, extra_instruction,
@@ -342,15 +371,15 @@ class XHCYAnalyze:
         if not requirement:
             raise XHCYError("需求（requirement）不能为空")
         if model not in MODEL_CAPABILITY:
-            raise XHCYError(
-                f"未知的模型：{model}\n"
-                f"当前可用的模型：{' / '.join(MODEL_LIST)}"
-            )
-        if skill not in SKILLS:
+            raise XHCYError(unavailable_model_message(model, MODEL_LIST))
+        if skill == NO_SKILL:
+            spec = None
+        elif skill not in SKILLS:
             raise XHCYError(f"未知的角色：{skill}")
+        else:
+            spec = SKILLS[skill]
 
         capability = MODEL_CAPABILITY[model]
-        spec = SKILLS[skill]
 
         # ---- 收集素材 ------------------------------------------------ #
         pieces: list[dict] = []
@@ -394,22 +423,38 @@ class XHCYAnalyze:
             )
 
         # ---- 组装请求 ------------------------------------------------ #
-        material_note = ""
+        if spec is None:
+            # 「无」：不查角色表，不发送 system / output_contract。
+            parts = [requirement]
+            extra = (extra_instruction or "").strip()
+            if extra:
+                parts.append(extra)
+            user_body = "\n\n".join(parts)
+            messages = []
+        else:
+            material_note = ""
+            if pieces:
+                material_note = (
+                    f"\n\n【素材】一共 {image_count + frame_count} 张："
+                    f"参考图 {image_count} 张，视频抽帧 {frame_count} 张。"
+                    f"请按图片出现的顺序理解它们（Image 1、Image 2 …）。"
+                )
+
+            user_text = requirement + material_note
+            if (extra_instruction or "").strip():
+                user_text += f"\n\n【额外要求】\n{extra_instruction.strip()}"
+            user_body = spec["output_contract"] + "\n\n【用户需求】\n" + user_text
+            messages = [{"role": "system", "content": spec["system"]}]
+
         if pieces:
-            material_note = (
-                f"\n\n【素材】一共 {image_count + frame_count} 张："
-                f"参考图 {image_count} 张，视频抽帧 {frame_count} 张。"
-                f"请按图片出现的顺序理解它们（Image 1、Image 2 …）。"
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": user_body}, *pieces],
+                }
             )
-
-        user_text = requirement + material_note
-        if (extra_instruction or "").strip():
-            user_text += f"\n\n【额外要求】\n{extra_instruction.strip()}"
-
-        messages: list[dict] = [
-            {"role": "system", "content": spec["system"]},
-            {"role": "user", "content": spec["output_contract"] + "\n\n【用户需求】\n" + user_text},
-        ]
+        else:
+            messages.append({"role": "user", "content": user_body})
 
         payload: dict = {
             "model": model,
@@ -417,13 +462,6 @@ class XHCYAnalyze:
             "temperature": float(temperature),
             "max_tokens": int(max_tokens),
         }
-        if pieces:
-            # 多模态：正文和素材放在同一条 user 消息里
-            messages[1] = {
-                "role": "user",
-                "content": [{"type": "text", "text": spec["output_contract"] + "\n\n【用户需求】\n" + user_text}]
-                + pieces,
-            }
 
         api_key, base_url = resolve_credentials(api_key, base_url)
         client = XHCYClient(api_key, base_url)

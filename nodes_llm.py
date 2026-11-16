@@ -1,15 +1,17 @@
 """XHCY AI text / chat node.
 
-站点在 2026-10 新增了一批文本模型，全部走 OpenAI 兼容的
-``POST /v1/chat/completions``：
+语言模型下拉已于 2026-11-16 按
+GET https://ai.xhcyai.org/api/public-models 同步，只保留当时公开的语言 / 对话模型。
+已移除不再发布的 claude-fable-5、claude-fable-5-1、claude-opus-5-5，
+并加入 kimi-k3.1-pro。
 
-    gpt-6.1-sol · claude-opus-5-5 · claude-fable-5 · claude-fable-5-1
-    gemini-3.8-flash · gemini-3.1-pro · gemini-3-flash
-    deepseek-v4.1-flash · MiniMax-Text-01 · MiniMax-VL-01 · abab5.5s-chat
+这些模型走 OpenAI 兼容的 ``POST /v1/chat/completions``。
+一个节点用下拉切换。接了图片时会组装成多模态消息
+（``content`` 数组 + data URI）。这条路径只有视觉模型支持；
+纯文本模型接了图会被拒绝。
 
-一个节点覆盖全部，用下拉切换。接了图片输入时会组装成多模态消息
-（``content`` 数组 + data URI），这条路径只有视觉模型支持
-（例如 MiniMax-VL-01、gemini / claude / gpt 系列），纯文本模型接了图会被上游拒绝。
+已下线的模型仍以原始 ID 留在下拉值里，避免旧工作流被改成别的模型。
+运行时会要求重新选择当前模型。
 
 典型用法：把输出接到文生图 / 文生视频节点的提示词输入，让模型先帮你把想法写细。
 """
@@ -36,34 +38,49 @@ except ImportError:  # allow running this file standalone for debugging
     from xhcy_credentials import resolve_credentials  # type: ignore
 
 
-# 站点当前公开的文本模型（GET /api/public-models，2026-10-23 核对）
-#
-# 已剔除 MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat：
-# 这三个不再作为文本模型公开，调文本会失败。
-# 2026-11-02 按 GET https://ai.xhcyai.org/v1/models 的真实清单重排。
-# 已移除：gemini-3-flash / gemini-3.1-pro —— 站点上已经没有这两个，
-# 选了只会报「no available channel」。
-# 也已移除 MiniMax-Text-01 / MiniMax-VL-01 / abab5.5s-chat：
-# 2026-11-02 实测调文本返回 HTTP 404。
+# 2026-11-16 按 GET https://ai.xhcyai.org/api/public-models 同步。
+# 只保留当时公开的语言 / 对话模型。顺序与分析节点里重叠的三项一致。
 MODEL_LIST = [
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
+    "gemini-3.8-flash",
+    "gpt-6.1-sol",
+    "kimi-k3.1-pro",
     "deepseek-v4.1-flash",
     "deepseek-v4.1-flash-1017",
-    "gpt-6.1-sol",
-    "claude-opus-5-5",
-    "claude-fable-5",
-    "claude-fable-5-1",
-    "gemini-3.8-flash",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
 ]
 
 DEFAULT_MODEL = "gemini-3.8-flash"
 
-# 站点没有给出各模型的能力清单，这里按公开常识标注，仅用于提示
+# 值必须是原始 ID，这样已保存的工作流不会被改成默认模型。
+DELISTED_MODEL_IDS = (
+    "claude-fable-5",
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+)
+
+
+def model_combo_values() -> list[str]:
+    values = list(MODEL_LIST)
+    for model_id in DELISTED_MODEL_IDS:
+        if model_id not in values:
+            values.append(model_id)
+    return values
+
+
+def unavailable_model_message(model, current_ids) -> str:
+    name = model if isinstance(model, str) and model.strip() else "（空）"
+    return (
+        f"模型「{name}」已不在当前可用清单中，请重新选择一个当前模型。\n"
+        f"当前可用：{' / '.join(current_ids)}"
+    )
+
+
+# 视觉 / 文本按公开模型能力区分，站点清单是最终依据。
 _VISION_HINT = (
     "接了图片就会按多模态消息发送（图片转成 data URI 内嵌）。"
-    "只有视觉模型支持，例如 gemini / claude / gpt 系列；"
-    "纯文本模型接了图会被上游拒绝。"
+    "只有视觉模型支持；纯文本模型接了图会被拒绝。"
+    "不在当前清单里的模型会保留原来的 ID，运行前请改选一个当前模型。"
 )
 
 
@@ -89,8 +106,11 @@ class XHCYChat:
                     },
                 ),
                 "model": (
-                    list(MODEL_LIST),
-                    {"default": DEFAULT_MODEL, "tooltip": "站点上的文本/多模态模型。"},
+                    model_combo_values(),
+                    {
+                        "default": DEFAULT_MODEL,
+                        "tooltip": "当前公开的语言 / 对话模型。已下线的模型会保留原 ID，运行前请重选。",
+                    },
                 ),
                 "api_key": (
                     "STRING",
@@ -142,6 +162,12 @@ class XHCYChat:
             },
         }
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, model):
+        # 收下任意已保存的模型 ID，避免校验阶段把它判掉或换成默认值。
+        # 不在当前清单里的 ID 由 chat() 用中文要求重选。
+        return True
+
     # ------------------------------------------------------------------ #
 
     def chat(self, prompt, model, api_key, system, temperature, max_tokens,
@@ -149,8 +175,8 @@ class XHCYChat:
         prompt = (prompt or "").strip()
         if not prompt:
             raise XHCYError("提示词（prompt）不能为空")
-        if MODEL_LIST and model not in MODEL_LIST:
-            raise XHCYError(f"未知的模型：{model}")
+        if model not in MODEL_LIST:
+            raise XHCYError(unavailable_model_message(model, MODEL_LIST))
 
         messages: list[dict] = []
         system_text = (system or "").strip()
