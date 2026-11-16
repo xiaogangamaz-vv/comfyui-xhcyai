@@ -1,4 +1,4 @@
-"""XHCY AI video node — Seedance 2.0（火山引擎方舟）。
+"""XHCY AI video node — Seedance 2.0。
 
 一个节点覆盖四种用法，靠「接了什么素材」自动判断：
 
@@ -7,7 +7,7 @@
     接 first_frame + last_frame    → 首尾帧过渡
     接 image1~9 / video1~3 / audio1~3 → 多模态参考
 
-首尾帧与参考素材**互斥**（Ark 的硬约束），同时接会直接报中文错误。
+首尾帧与参考素材**互斥**（上游硬约束），同时接会直接报中文错误。
 
 规格（分辨率 / 时长 / 比例）取自 xhcy_seedance_specs.py，
 数据源是站点 /api/video/models 的实测返回。
@@ -82,7 +82,7 @@ class XHCYSeedance2(XHCYVideoBase):
 
     PROMPT_TOOLTIP = (
         "描述你要生成的视频。接了多张参考图时，按顺序用「Image 1」「Image 2」引用它们。"
-        "首尾帧模式请描述「从什么画面过渡到什么画面」。留空会直接报错，不会白白扣费。"
+        "首尾帧模式请描述「从什么画面过渡到什么画面」。留空会直接报错，不会发出请求。"
     )
     NODE_ID = "xhcy_seedance2"
     OUTPUT_PREFIX = "xhcy_seedance2"
@@ -106,7 +106,7 @@ class XHCYSeedance2(XHCYVideoBase):
             "BOOLEAN",
             {
                 "default": False,
-                "tooltip": "打开后视频会带原生同步音频（人声/环境音/音效）。不影响价格。",
+                "tooltip": "打开后视频会带原生同步音频（人声/环境音/音效）。",
             },
         )
         types["required"]["watermark"] = (
@@ -154,14 +154,14 @@ class XHCYSeedance2(XHCYVideoBase):
                 "VIDEO",
                 {
                     "tooltip": f"参考视频 #{i}（最多 {MAX_REF_VIDEOS} 段）。"
-                    "素材以数据流内嵌上传，体积越大越慢；参考视频按输出分辨率同样计费。"
+                    "素材以数据流内嵌上传，体积越大越慢。"
                 },
             )
         for i in range(1, MAX_REF_AUDIOS + 1):
             inputs[f"audio{i}"] = (
                 "AUDIO",
                 {
-                    "tooltip": f"参考音频 #{i}（最多 {MAX_REF_AUDIOS} 段，免费）。"
+                    "tooltip": f"参考音频 #{i}（最多 {MAX_REF_AUDIOS} 段）。"
                     "⚠️ 音频不能是唯一素材，至少要配一张参考图或一段参考视频。"
                 },
             )
@@ -281,7 +281,7 @@ class XHCYSeedance2(XHCYVideoBase):
         if kwargs.get("watermark"):
             extra["watermark"] = True
         if kwargs.get("web_search"):
-            # Ark 只支持 web_search 这一种工具，且是数组形式
+            # 上游只支持 web_search 这一种工具，且是数组形式
             extra["tools"] = [{"type": "web_search"}]
 
         return extra

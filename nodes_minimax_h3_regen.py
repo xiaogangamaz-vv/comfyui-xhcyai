@@ -1,12 +1,10 @@
 """XHCY AI video node — MiniMax H3, 768P -> 2K regeneration.
 
-接口来自站点后端源码（``router/relay.go`` 与 ``relay/controller/video.go``）：
-
     POST /v1/video/regenerations
     {
       "model": "MiniMax-H3",
       "resolution": "2K",           # 只支持 2K，别的值站点直接 400
-      "duration": 5,                # 必填；输出长度跟随源视频，这个值只用于计费
+      "duration": 5,                # 必填；输出长度跟随源视频，请填源视频时长
       "source_task_id": "..."       # 二选一：① 用已有任务的结果
     }
     # 或者
@@ -126,7 +124,7 @@ class XHCYMiniMaxH3Regeneration(XHCYVideoBase):
                         "min": 1,
                         "max": 60,
                         "tooltip": (
-                            "秒。输出长度跟随源视频，这里填的只用于计费（按输出秒数计价）。"
+                            "秒。输出长度跟随源视频，请填源视频时长。"
                             "超出 4～30 秒会自动收进区间。"
                         ),
                     },
@@ -235,7 +233,7 @@ class XHCYMiniMaxH3Regeneration(XHCYVideoBase):
             f"XHCY 视频再生成成功\n"
             f"方式：{mode_text}\n"
             f"模型：{model}\n"
-            f"目标：{TARGET_RESOLUTION} · 计费按 {seconds} 秒\n"
+            f"目标：{TARGET_RESOLUTION} · {seconds} 秒\n"
             f"任务：{task_id}\n"
             f"文件：{path}"
         )

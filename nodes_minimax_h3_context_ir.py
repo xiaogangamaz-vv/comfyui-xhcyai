@@ -1,7 +1,5 @@
 """XHCY AI video node — MiniMax H3 Context-IR（提示词增强）.
 
-接口来自站点后端源码（``router/relay.go`` 与 ``relay/controller/video_context_ir.go``）：
-
     POST /v1/video/context-ir
     {
       "model": "MiniMax-H3",
@@ -14,7 +12,7 @@
 
     {"success": true, "message": "", "data": {"task_id": "...", "model": "...", "prompt": "..."}}
 
-它**不生成视频**，按次计费。典型用法是把输出接到下面的文生视频节点当提示词用。
+它不生成视频，只返回增强后的提示词。典型用法是把输出接到文生视频节点。
 """
 
 from __future__ import annotations
@@ -126,7 +124,7 @@ class XHCYMiniMaxH3ContextIR:
                         "min": 1,
                         "max": 60,
                         "tooltip": (
-                            "秒。这只是上游要求的必填项（增强结果与它无关，费用也按次收），"
+                            "秒。这只是上游要求的必填项，增强结果与它无关。"
                             "超出 4～30 秒会自动收进区间。"
                         ),
                     },

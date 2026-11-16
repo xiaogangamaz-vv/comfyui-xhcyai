@@ -164,7 +164,7 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
                     tooltip=(
                         "描述你要生成的视频。多张参考图时，在提示词里按顺序用"
                         "「Image 1」「Image 2」引用它们，例如：让 Image 1 里的女孩穿上 Image 2 的裙子。"
-                        "留空会直接报错，不会白白扣费。"
+                        "留空会直接报错，不会发出请求。"
                     ),
                 ),
                 io.Combo.Input(
@@ -189,7 +189,7 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
                     default=_DEFAULT_DURATION,
                     min=1,
                     max=60,
-                    tooltip="时长（秒），按秒计费。超出所选模型范围时会自动收进合法区间并提示。",
+                    tooltip="时长（秒）。超出所选模型范围时会自动收进合法区间并提示。",
                 ),
                 io.Combo.Input(
                     "ratio",

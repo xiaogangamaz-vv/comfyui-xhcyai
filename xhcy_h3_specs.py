@@ -2,8 +2,6 @@
 
 数据来源（2026-10-15 核对）：
     * ``GET https://ai.xhcyai.org/api/video/models``
-    * 站点后端源码 ``relay/adaptor/minimax/video.go`` 里的 VideoResolutions /
-      VideoDurationRange / AllowedVideoRatiosFor / VideoInputLimitsFor
 三个 H3 节点（文生 / 首尾帧 / 多模态参考）共用这一份，改参数只需改这里。
 
 站点当前（2026-10-15）的规格：
@@ -15,8 +13,7 @@
     * **MiniMax-H3-Max 已下线。** 后端 IsVideoModel 的白名单只有 H3 与
       H3-Lite，继续用 Max 会被直接拒绝（unsupported video model），
       所以它从下拉里移除了。
-    * **H3 新增 2K 分辨率**，时长上限也从 15 秒放宽到 30 秒
-      （站点注明：超过 15 秒时输出与素材费用翻倍）。
+    * **H3 新增 2K 分辨率**，时长上限也从 15 秒放宽到 30 秒。
 
 另有两条独立能力，走各自的接口，不由本文件的三个节点覆盖，见：
     * 768P→2K 再生成   ``POST /v1/video/regenerations``

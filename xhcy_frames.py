@@ -2,9 +2,7 @@
 
 为什么需要它
 ------------
-站点的聊天通道 ``/v1/chat/completions`` 只认 ``image_url``，**不认
-``video_url``**（源码里 ``video_url`` 只存在于视频适配器
-``relay/adaptor/minimax`` 与 ``relay/adaptor/ark``）。
+站点的聊天通道 ``/v1/chat/completions`` 只认 ``image_url``，不认 ``video_url``。
 所以要把视频喂给 LLM，只能先抽成图片。
 
 抽帧策略

@@ -1,5 +1,4 @@
 import base64
-import hashlib
 import importlib.util
 import io
 import os
@@ -165,15 +164,6 @@ class NanoBananaNodeTests(unittest.TestCase):
                     content = handle.read().lower()
                 for marker in markers:
                     self.assertNotIn(marker, content, relative_path)
-
-    def test_locked_billing_file_is_unchanged(self):
-        billing_path = os.path.join(os.path.dirname(NODE_PATH), "xinghuo.billing.lock")
-        with open(billing_path, "rb") as handle:
-            digest = hashlib.sha256(handle.read()).hexdigest()
-        self.assertEqual(
-            digest,
-            "6786a1a393ba2d7ef0ce7c8d0629b127a7e9e07bc324cabbe54aba4be1738164",
-        )
 
     def test_shared_client_download_never_forwards_provider_auth(self):
         calls = []
@@ -465,18 +455,16 @@ class NanoBananaNodeTests(unittest.TestCase):
         self.assertNotIn("key", result)
 
     def test_browser_balance_preview_excludes_credits_and_internal_errors(self):
-        billing = nodes._locked_billing()
         nodes.query_account_balance = lambda *_args: {
             "success": True,
             "credits": 987654,
-            "balance": 12.34,
-            "preview_costs": [billing[name]["display_amount"] for name in nodes._MODEL_LIST],
+            "balance": 987654,
             "error": "internal details must never be sent to the browser",
         }
         preview = nodes.public_balance_preview("key", "nano-banana-2")
-        self.assertEqual(preview, {"success": True, "balance": 12.34,
-                                   "preview_costs": [billing[name]["display_amount"] for name in nodes._MODEL_LIST]})
+        self.assertEqual(preview, {"success": True, "balance": 987654})
         self.assertNotIn("credits", preview)
+        self.assertNotIn("preview_costs", preview)
         self.assertNotIn("error", preview)
 
         nodes.query_account_balance = lambda *_args: {
@@ -513,18 +501,13 @@ class NanoBananaNodeTests(unittest.TestCase):
         self.assertNotIn("private-provider.example", result["error"])
         self.assertNotIn("token", result["error"])
 
-    def test_configured_single_request_billing_is_locked_to_the_three_allowed_models(self):
-        billing = nodes._locked_billing()
-        self.assertEqual(list(billing), nodes._MODEL_LIST)
-        self.assertTrue(all(item["credits"] > 0 and item["display_amount"] > 0 for item in billing.values()))
-
-    def test_balance_uses_only_complete_calls_at_the_selected_model_rate(self):
+    def test_balance_reports_credits_without_a_local_price_table(self):
         nodes.requests.post = lambda *_args, **_kwargs: FakeResponse(payload={"code": 0, "data": {"credits": 2501}})
         result = nodes.query_account_balance("key", "nano-banana-2")
-        billing = nodes._locked_billing()["nano-banana-2"]
         self.assertEqual(result["credits"], 2501)
-        self.assertEqual(result["balance"], round((2501 // billing["credits"]) * billing["display_amount"], 2))
-        self.assertEqual(result["preview_costs"], [nodes._locked_billing()[name]["display_amount"] for name in nodes._MODEL_LIST])
+        self.assertEqual(result["balance"], 2501)
+        self.assertNotIn("preview_costs", result)
+        self.assertFalse(hasattr(nodes, "_locked_billing"))
 
     def test_interruption_before_submit_does_not_send_generation_request(self):
         original_interrupt = nodes.comfy.model_management.throw_exception_if_processing_interrupted
