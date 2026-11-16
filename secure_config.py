@@ -1,6 +1,8 @@
 """Local credential storage.
 
 Optional credentials use Windows DPAPI and never enter a workflow.
+The public site address and routes below are already documented in this
+repository. No service key is embedded.
 """
 
 import base64
@@ -8,71 +10,24 @@ import ctypes
 import getpass
 import json
 from ctypes import wintypes
-from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlparse
-
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 CONFIG_FILE = Path(__file__).with_name("xinghuo.secure.dpapi")
-_SERVICE_PROFILE_NONCE = ""
-_SERVICE_PROFILE_CIPHERTEXT = ""
-_SERVICE_PROFILE_KEY_SHARES = ()
-_SERVICE_PROFILE_AAD = ""
+_PUBLIC_ORIGIN = "https://ai.xhcyai.org"
+_PUBLIC_ROUTES = {
+    "balance": "/client/openapi/getAPIKeyCredits",
+    "submit": "/v1/draw/nano-banana",
+    "result": "/v1/draw/result",
+}
+
+
 class ConfigError(RuntimeError):
     pass
 
 
-def _decode_urlsafe(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value.encode("ascii"))
-
-
-@lru_cache(maxsize=1)
-def _locked_service_profile() -> dict:
-    """Decrypt the portable service profile and reject tampered metadata.
-
-    The embedded split key prevents plaintext endpoint strings in distributed
-    source. Because the client must connect to the service, this is not a
-    substitute for a server-side gateway against local reverse engineering.
-    """
-    try:
-        shares = [_decode_urlsafe(value) for value in _SERVICE_PROFILE_KEY_SHARES]
-        if len(shares) != 3 or any(len(value) != 32 for value in shares):
-            raise ValueError("invalid service key shares")
-        key = bytes(first ^ second ^ third for first, second, third in zip(*shares))
-        plaintext = AESGCM(key).decrypt(
-            _decode_urlsafe(_SERVICE_PROFILE_NONCE),
-            _decode_urlsafe(_SERVICE_PROFILE_CIPHERTEXT),
-            _decode_urlsafe(_SERVICE_PROFILE_AAD),
-        )
-        profile = json.loads(plaintext.decode("utf-8"))
-        origin = profile.get("origin")
-        routes = profile.get("routes")
-        parsed = urlparse(origin if isinstance(origin, str) else "")
-        if (
-            parsed.scheme != "https"
-            or not parsed.netloc
-            or parsed.username
-            or parsed.password
-            or parsed.path not in ("", "/")
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("invalid service origin")
-        if not isinstance(routes, dict) or set(routes) != {"balance", "submit", "result"}:
-            raise ValueError("invalid service routes")
-        if any(not isinstance(value, str) or not value.startswith("/") or "://" in value for value in routes.values()):
-            raise ValueError("invalid service route")
-    except (InvalidTag, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise ConfigError("节点加密服务配置无效或已损坏") from exc
-    return {"origin": origin.rstrip("/"), "routes": dict(routes)}
-
-
 def load_locked_service_profile() -> dict:
-    profile = _locked_service_profile()
-    return {"origin": profile["origin"], "routes": dict(profile["routes"])}
+    return {"origin": _PUBLIC_ORIGIN, "routes": dict(_PUBLIC_ROUTES)}
 
 
 def load_locked_service_origin() -> str:

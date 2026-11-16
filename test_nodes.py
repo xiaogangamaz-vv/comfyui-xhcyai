@@ -118,27 +118,20 @@ class NanoBananaNodeTests(unittest.TestCase):
         self.assertEqual(client.generation_url, "https://service.invalid/v1/draw/nano-banana")
         self.assertEqual(client.result_url, "https://service.invalid/v1/draw/result")
 
-    def test_default_service_origin_is_authenticated_encrypted(self):
+    def test_service_origin_is_public_site_without_embedded_key(self):
         origin = nodes.load_locked_service_origin()
         source_path = os.path.join(os.path.dirname(NODE_PATH), "secure_config.py")
         with open(source_path, "rb") as handle:
             source = handle.read()
 
-        self.assertTrue(origin.startswith("https://"))
-        self.assertNotIn(origin.encode("utf-8"), source)
-
-    def test_encrypted_service_profile_rejects_tampering(self):
-        config_module = sys.modules[nodes.load_locked_service_profile.__module__]
-        original = config_module._SERVICE_PROFILE_CIPHERTEXT
-        replacement = "A" if original[-2] != "A" else "B"
-        try:
-            config_module._SERVICE_PROFILE_CIPHERTEXT = original[:-2] + replacement + original[-1]
-            config_module._locked_service_profile.cache_clear()
-            with self.assertRaises(nodes.ConfigError):
-                nodes.load_locked_service_profile()
-        finally:
-            config_module._SERVICE_PROFILE_CIPHERTEXT = original
-            config_module._locked_service_profile.cache_clear()
+        self.assertEqual(origin, "https://ai.xhcyai.org")
+        self.assertNotIn(b"_SERVICE_PROFILE_KEY_SHARES", source)
+        self.assertNotIn(b"_SERVICE_PROFILE_CIPHERTEXT", source)
+        self.assertNotIn(b"_LOCKED_BILLING_DIGEST", source)
+        routes = nodes.load_locked_service_profile()["routes"]
+        self.assertEqual(routes["balance"], "/client/openapi/getAPIKeyCredits")
+        self.assertEqual(routes["submit"], "/v1/draw/nano-banana")
+        self.assertEqual(routes["result"], "/v1/draw/result")
 
     def test_runtime_package_has_no_plaintext_forbidden_provider_markers(self):
         root = os.path.dirname(NODE_PATH)
