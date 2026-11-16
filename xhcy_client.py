@@ -23,7 +23,13 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection, HTTPSConnection
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
-from urllib3.exceptions import ConnectTimeoutError, NameResolutionError, NewConnectionError
+from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
+
+try:
+    # urllib3 2. Name resolution failures are a distinct error there.
+    from urllib3.exceptions import NameResolutionError
+except ImportError:  # urllib3 1.26 has no NameResolutionError
+    NameResolutionError = None  # type: ignore[misc, assignment]
 
 DEFAULT_BASE_URL = "https://ai.xhcyai.org"
 
@@ -46,6 +52,14 @@ CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 
 _CONNECT_TIMEOUT = 10
 _READ_TIMEOUT = 300  # image/video generation can genuinely take minutes
+# Body-upload budget when the request did not carry its own read timeout.
+# urllib3 keeps the connect timeout on the socket until after the body is
+# written, so a reference-video JSON POST would otherwise die in ~10 seconds
+# with "The write operation timed out".
+_UPLOAD_TIMEOUT = _READ_TIMEOUT
+# Stable phrase. It contains 超时, which video-task recovery would otherwise
+# treat as a Cloudflare 524 and tell the user to submit again.
+UPLOAD_WRITE_TIMEOUT_MARK = "上传写出超时"
 # Handshake retries only. A failed handshake means the request never left the
 # machine, so repeating it cannot submit the same generation twice.
 _CONNECT_RETRY_DELAYS = (0.4, 1.0)
@@ -182,6 +196,58 @@ def connect_candidates(addresses, timeout, socket_options=None, source_address=N
     raise socket.timeout("timed out")
 
 
+def _coerce_timeout_seconds(value):
+    if value is None or value is socket._GLOBAL_DEFAULT_TIMEOUT:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    return number
+
+
+def _upload_budget(timeout) -> float:
+    """Seconds allowed for writing the request body.
+
+    ``timeout`` is the urllib3 timeout for this request: a Timeout with
+    separate connect and read values, or a single number. The read half is
+    the upload budget. Missing or non-positive values use ``_UPLOAD_TIMEOUT``.
+    """
+    read = timeout
+    if hasattr(timeout, "read_timeout"):
+        try:
+            read = timeout.read_timeout
+        except Exception:
+            read = getattr(timeout, "_read", None)
+    seconds = _coerce_timeout_seconds(read)
+    if seconds is None:
+        return float(_UPLOAD_TIMEOUT)
+    return seconds
+
+
+def _remember_upload_timeout(conn, timeout) -> None:
+    conn._xhcy_upload_timeout = _upload_budget(timeout)
+
+
+def _arm_upload_timeout(conn) -> None:
+    """Put the upload budget on a socket that has already finished the handshake.
+
+    A missing socket means TCP/TLS is not done yet. Do not lengthen that wait.
+    """
+    sock = getattr(conn, "sock", None)
+    if sock is None:
+        return
+    budget = getattr(conn, "_xhcy_upload_timeout", None)
+    if budget is None:
+        budget = float(_UPLOAD_TIMEOUT)
+    try:
+        sock.settimeout(budget)
+    except OSError:
+        return
+
+
 class _RacingHTTPConnection(HTTPConnection):
     def _new_conn(self) -> socket.socket:
         host = self._dns_host
@@ -192,7 +258,11 @@ class _RacingHTTPConnection(HTTPConnection):
                 addresses, self.timeout, self.socket_options, self.source_address
             )
         except socket.gaierror as exc:
-            raise NameResolutionError(self.host, self, exc) from exc
+            if NameResolutionError is not None:
+                raise NameResolutionError(self.host, self, exc) from exc
+            raise NewConnectionError(
+                self, "Failed to resolve %s: %s" % (self.host, exc)
+            ) from exc
         except TimeoutError as exc:
             raise ConnectTimeoutError(
                 self,
@@ -203,16 +273,46 @@ class _RacingHTTPConnection(HTTPConnection):
                 self, "Failed to establish a new connection: %s" % exc
             ) from exc
 
+    def connect(self):
+        super().connect()
+        # Handshake is done. The socket still has the short connect budget.
+        _arm_upload_timeout(self)
+
+    def send(self, data):
+        # urllib3 copies self.timeout onto the socket inside request(), and at
+        # that moment self.timeout is the connect timeout. The read timeout is
+        # applied only after request() returns — which is after SSLSocket.sendall
+        # of the body (urllib3 1.26 and 2.x). A large reference-video JSON body
+        # then fails with "The write operation timed out" in about 10 seconds.
+        # Set the upload budget here, after that copy and before the write.
+        if getattr(self, "sock", None) is None and not getattr(self, "_xhcy_opening", False):
+            self._xhcy_opening = True
+            try:
+                self.connect()
+            finally:
+                self._xhcy_opening = False
+        _arm_upload_timeout(self)
+        return super().send(data)
+
 
 class _RacingHTTPSConnection(_RacingHTTPConnection, HTTPSConnection):
     pass
 
 
-class _RacingHTTPPool(HTTPConnectionPool):
+class _UploadBudgetPool:
+    """Remember the request's read timeout before urllib3 overwrites conn.timeout."""
+
+    def _make_request(self, conn, method, url, *args, **kwargs):
+        if "timeout" in kwargs:
+            _remember_upload_timeout(conn, kwargs["timeout"])
+        return super()._make_request(conn, method, url, *args, **kwargs)
+
+
+class _RacingHTTPPool(_UploadBudgetPool, HTTPConnectionPool):
     ConnectionCls = _RacingHTTPConnection
 
 
-class _RacingHTTPSPool(HTTPSConnectionPool):
+class _RacingHTTPSPool(_UploadBudgetPool, HTTPSConnectionPool):
     ConnectionCls = _RacingHTTPSConnection
 
 
@@ -243,22 +343,64 @@ def _environ_proxies(url: str) -> bool:
         return False
 
 
+def _exception_text(exc: BaseException) -> str:
+    """Flatten an exception and the errors it wraps, lowercased."""
+    parts: list[str] = []
+    stack: list[BaseException | None] = [exc]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        parts.append(str(current))
+        stack.append(current.__cause__)
+        stack.append(current.__context__)
+        for arg in getattr(current, "args", ()):
+            if isinstance(arg, BaseException):
+                stack.append(arg)
+    return "\n".join(parts).lower()
+
+
+def _is_upload_write_timeout(exc: BaseException) -> bool:
+    """True when the socket timed out while writing the request body.
+
+    urllib3 surfaces this as ConnectionError / ProtocolError around
+    ``TimeoutError: The write operation timed out``, not as ReadTimeout.
+    The gateway may already have the bytes, so this must not be retried.
+    """
+    if isinstance(exc, (requests.ConnectTimeout, requests.ReadTimeout)):
+        return False
+    return "write operation timed out" in _exception_text(exc)
+
+
+def _is_mid_body_abort(exc: BaseException) -> bool:
+    """True when the connection dropped while the request was being written."""
+    if isinstance(exc, (requests.ConnectTimeout, requests.ReadTimeout, requests.Timeout)):
+        return False
+    if _is_upload_write_timeout(exc):
+        return False
+    return "connection aborted" in _exception_text(exc)
+
+
 def _request_not_sent(exc: BaseException) -> bool:
     """True only when the HTTP request cannot have reached the gateway.
 
-    A dropped upload or a read timeout may already have been accepted, and
-    repeating it could record the same generation twice. A handshake that
-    never completed cannot.
+    A dropped upload, a write timeout, or a read timeout may already have
+    been accepted, and repeating it could record the same generation twice.
+    A handshake that never completed cannot.
     """
     if isinstance(exc, requests.ConnectTimeout):
         return True
     if isinstance(exc, (requests.ReadTimeout, requests.Timeout)):
         return False
+    if _is_upload_write_timeout(exc) or _is_mid_body_abort(exc):
+        return False
     if not isinstance(exc, requests.ConnectionError):
         return False
     if isinstance(exc, (requests.exceptions.ChunkedEncodingError, requests.exceptions.SSLError)):
         return False
-    text = str(exc).lower()
+    text = _exception_text(exc)
     return any(
         marker in text
         for marker in (
@@ -271,6 +413,46 @@ def _request_not_sent(exc: BaseException) -> bool:
             "nodename nor servname",
         )
     )
+
+
+def _upload_write_timeout_message(context: str) -> str:
+    return (
+        "%s%s。参考视频会让 JSON 请求体变得很大，上传可能比握手久很多；"
+        "这次失败只说明本机在把请求体写出去时超过了等待时间，并不能说明站点已经宕掉。"
+        "请求有可能已经被网关收下并开始计费，请先到任务列表确认，不要立刻再次提交。"
+        % (context, UPLOAD_WRITE_TIMEOUT_MARK)
+    )
+
+
+def _handshake_failure_message(context: str) -> str:
+    return "%s握手未完成，请检查网络后重试" % context
+
+
+def _response_timeout_message(context: str, note: str) -> str:
+    return "%s已发出，但等待网关响应超时%s" % (context, note)
+
+
+def _mid_body_abort_message(context: str) -> str:
+    return (
+        "%s在上传请求体时连接中断。这不能单独说明站点已经宕掉；"
+        "请求可能已经送到网关并开始计费，请先到任务列表确认，不要立刻再次提交。"
+        % context
+    )
+
+
+def _failure_from_transport(exc: BaseException, context: str, note: str) -> XHCYError:
+    """Map a transport error to a message that says which stage failed."""
+    if _is_upload_write_timeout(exc):
+        return XHCYError(_upload_write_timeout_message(context))
+    if isinstance(exc, requests.ReadTimeout) or (
+        isinstance(exc, requests.Timeout) and not isinstance(exc, requests.ConnectTimeout)
+    ):
+        return XHCYError(_response_timeout_message(context, note))
+    if _request_not_sent(exc):
+        return XHCYError(_handshake_failure_message(context))
+    if _is_mid_body_abort(exc):
+        return XHCYError(_mid_body_abort_message(context))
+    return XHCYError("%s网络失败，请检查网络后重试" % context)
 
 
 def _read_body(response: requests.Response, max_bytes: int) -> bytes:
@@ -409,8 +591,9 @@ class XHCYClient:
         """Call the gateway.
 
         A handshake failure is retried: the HTTP request was not sent, so a
-        repeat cannot create a second billed task. A read timeout is not
-        retried, because the gateway may already be working on the request.
+        repeat cannot create a second billed task. A write timeout, a mid-body
+        abort, and a read timeout are not retried, because the gateway may
+        already have accepted the request.
         """
         url = path if path.startswith("http") else self.base_url + path
         sessions = [self._direct]
@@ -443,9 +626,9 @@ class XHCYClient:
                     break
             if not try_next_session:
                 break
-        if isinstance(last_error, requests.Timeout):
-            raise XHCYError(f"{context}超时{note}") from last_error
-        raise XHCYError(f"{context}网络失败，请检查网络后重试") from last_error
+        if last_error is None:
+            raise XHCYError("%s网络失败，请检查网络后重试" % context)
+        raise _failure_from_transport(last_error, context, note) from last_error
 
     # 上游偶发的 502 / 503 / 504（站点原话「服务端暂时不可用」）。
     # 这类状态码表示请求根本没被处理，重试不会造成重复扣费，所以自动重试几次。

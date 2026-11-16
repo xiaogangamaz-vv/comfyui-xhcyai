@@ -727,7 +727,8 @@ class GatewayReachabilityTests(unittest.TestCase):
             with self.assertRaises(XHCYError) as caught:
                 client._send("POST", "/v1/images/generations", "图像生成请求")
         self.assertEqual(calls["n"], 1)
-        self.assertIn("超时", str(caught.exception))
+        self.assertIn("等待网关响应超时", str(caught.exception))
+        self.assertNotIn(xhcy_client.UPLOAD_WRITE_TIMEOUT_MARK, str(caught.exception))
 
         calls["n"] = 0
 
@@ -736,9 +737,12 @@ class GatewayReachabilityTests(unittest.TestCase):
             raise requests.ConnectionError("Connection aborted.")
 
         with mock.patch.object(requests.Session, "request", aborted):
-            with self.assertRaises(XHCYError):
+            with self.assertRaises(XHCYError) as aborted_error:
                 client._send("POST", "/v1/images/generations", "图像生成请求")
         self.assertEqual(calls["n"], 1)
+        self.assertIn("连接中断", str(aborted_error.exception))
+        self.assertNotIn("握手未完成", str(aborted_error.exception))
+        self.assertNotIn(xhcy_client.UPLOAD_WRITE_TIMEOUT_MARK, str(aborted_error.exception))
 
     def test_stalled_address_does_not_block_a_working_one(self):
         import socket
@@ -788,6 +792,204 @@ class GatewayReachabilityTests(unittest.TestCase):
             response = session.get("http://127.0.0.1:%d/v1/models" % port, timeout=(3, 3))
         self.assertEqual(response.status_code, 200)
         self.assertTrue(called["yes"])
+
+    def test_write_timeout_is_not_retried_as_a_handshake(self):
+        import urllib3.exceptions
+
+        import xhcy_client
+
+        client = XHCYClient("sk-test", "https://example.invalid")
+        calls = []
+
+        def write_timeout(session, method, url, **kwargs):
+            calls.append(session)
+            timeout = TimeoutError("The write operation timed out")
+            protocol = urllib3.exceptions.ProtocolError("Connection aborted.", timeout)
+            try:
+                raise protocol
+            except urllib3.exceptions.ProtocolError as protocol_error:
+                raise requests.ConnectionError(protocol_error)
+
+        with mock.patch.object(requests.Session, "request", write_timeout), mock.patch.object(
+            xhcy_client, "_environ_proxies", lambda _url: True
+        ):
+            with self.assertRaises(XHCYError) as caught:
+                client._send("POST", "/v1/video/generations", "视频生成请求")
+        # One direct attempt. Not the handshake retries, and not the proxy session.
+        self.assertEqual(calls, [client._direct])
+        message = str(caught.exception)
+        self.assertIn(xhcy_client.UPLOAD_WRITE_TIMEOUT_MARK, message)
+        self.assertIn("参考视频", message)
+        self.assertIn("并不能说明站点已经宕掉", message)
+        self.assertIn("不要立刻再次提交", message)
+        self.assertNotIn("握手未完成", message)
+        self.assertNotIn("等待网关响应超时", message)
+
+    def test_exhausted_handshake_is_not_described_as_an_upload(self):
+        import xhcy_client
+
+        client = XHCYClient("sk-test", "https://example.invalid")
+        calls = {"n": 0}
+
+        def handshake(session, method, url, **kwargs):
+            calls["n"] += 1
+            raise requests.ConnectTimeout("timed out")
+
+        with mock.patch.object(requests.Session, "request", handshake), mock.patch.object(
+            xhcy_client, "_CONNECT_RETRY_DELAYS", (0, 0)
+        ), mock.patch.object(xhcy_client, "_environ_proxies", lambda _url: False):
+            with self.assertRaises(XHCYError) as caught:
+                client._send("POST", "/v1/video/generations", "视频生成请求")
+        self.assertEqual(calls["n"], 3)
+        message = str(caught.exception)
+        self.assertIn("握手未完成", message)
+        self.assertNotIn(xhcy_client.UPLOAD_WRITE_TIMEOUT_MARK, message)
+        self.assertNotIn("等待网关响应超时", message)
+
+    def test_request_body_uses_read_timeout_after_handshake(self):
+        """A finished TLS handshake must not keep the connect timeout for sendall."""
+        import shutil
+        import socket
+        import ssl
+        import subprocess
+        import tempfile
+        import threading
+        import warnings
+
+        import urllib3.exceptions
+
+        import xhcy_client
+
+        if shutil.which("openssl") is None:
+            self.skipTest("openssl is required to mint a loopback certificate")
+
+        observed = []
+        real_sendall = ssl.SSLSocket.sendall
+
+        def spy_sendall(sock, data, *args, **kwargs):
+            if isinstance(data, (bytes, bytearray)) and len(data) > 4096:
+                observed.append(sock.gettimeout())
+            return real_sendall(sock, data, *args, **kwargs)
+
+        def serve(port_holder, pem_path):
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            server.settimeout(5)
+            port_holder.append(server.getsockname()[1])
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(pem_path)
+            tls = None
+            try:
+                raw, _addr = server.accept()
+            except socket.timeout:
+                server.close()
+                return
+            try:
+                tls = context.wrap_socket(raw, server_side=True)
+                tls.settimeout(5)
+                buf = b""
+                while b"\r\n\r\n" not in buf:
+                    piece = tls.recv(16384)
+                    if not piece:
+                        break
+                    buf += piece
+                head, _, rest = buf.partition(b"\r\n\r\n")
+                length = 0
+                for line in head.split(b"\r\n"):
+                    if line.lower().startswith(b"content-length:"):
+                        length = int(line.split(b":", 1)[1].strip())
+                while len(rest) < length:
+                    piece = tls.recv(16384)
+                    if not piece:
+                        break
+                    rest += piece
+                payload = b'{"ok":true}'
+                tls.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+                    % (len(payload), payload)
+                )
+            finally:
+                for held in (tls, raw, server):
+                    if held is None:
+                        continue
+                    try:
+                        held.close()
+                    except OSError:
+                        pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            pem_path = os.path.join(directory, "localhost.pem")
+            subprocess.check_call(
+                [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                    "-keyout", pem_path, "-out", pem_path,
+                    "-days", "1", "-nodes", "-subj", "/CN=127.0.0.1",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            port_holder = []
+            thread = threading.Thread(target=serve, args=(port_holder, pem_path), daemon=True)
+            thread.start()
+            while not port_holder and thread.is_alive():
+                thread.join(0.01)
+            self.assertTrue(port_holder)
+            port = port_holder[0]
+            body = b'{"content":"%s"}' % (b"v" * 80000)
+            ssl.SSLSocket.sendall = spy_sendall
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+                    session = xhcy_client._new_session(False)
+                    response = session.post(
+                        "https://127.0.0.1:%d/v1/video/generations" % port,
+                        data=body,
+                        timeout=(0.5, 4.25),
+                        verify=False,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    response.close()
+                    session.close()
+                    self.assertTrue(observed, "request body was not written")
+                    for value in observed:
+                        self.assertIsNotNone(value)
+                        self.assertGreater(float(value), 0.5)
+                        self.assertAlmostEqual(float(value), 4.25, places=2)
+                    thread.join(2)
+
+                    observed.clear()
+                    # The production client always passes (_CONNECT_TIMEOUT, _READ_TIMEOUT).
+                    # The body write must use the read half, not the 10s connect half.
+                    port_holder = []
+                    thread = threading.Thread(
+                        target=serve, args=(port_holder, pem_path), daemon=True
+                    )
+                    thread.start()
+                    while not port_holder and thread.is_alive():
+                        thread.join(0.01)
+                    self.assertTrue(port_holder)
+                    client = XHCYClient("sk-test", "https://127.0.0.1:%d" % port_holder[0])
+                    response = client._send(
+                        "POST",
+                        "/v1/video/generations",
+                        "视频生成请求",
+                        data=body,
+                        verify=False,
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    response.close()
+                    client._direct.close()
+                    self.assertTrue(observed, "client request body was not written")
+                    for value in observed:
+                        self.assertGreater(float(value), float(xhcy_client._CONNECT_TIMEOUT))
+                        self.assertAlmostEqual(
+                            float(value), float(xhcy_client._READ_TIMEOUT), places=2
+                        )
+            finally:
+                ssl.SSLSocket.sendall = real_sendall
+            thread.join(2)
 
     def test_video_and_enhance_urls_stay_on_the_gateway_before_any_other_host(self):
         client = XHCYClient("sk-test", "https://example.invalid")
