@@ -267,6 +267,14 @@ def as_v3_node(cls, node_id: str | None = None, display_name: str | None = None)
         f"旧式调用入口，转发到原节点的 {func_name}()。"
     )
     setattr(_XHCYV3Adapter, func_name, _legacy_call)
+    # v3 执行读的是 validate_inputs。旧节点上的 VALIDATE_INPUTS 要抄过去，
+    # 否则下拉里没有的已保存模型 ID 会在执行前被判掉。
+    if "VALIDATE_INPUTS" in cls.__dict__:
+        def validate_inputs(cls2, model):
+            return cls.VALIDATE_INPUTS(model)
+
+        _XHCYV3Adapter.VALIDATE_INPUTS = classmethod(validate_inputs)
+        _XHCYV3Adapter.validate_inputs = classmethod(validate_inputs)
     # 故意**不覆盖** INPUT_TYPES：v3 的 INPUT_TYPES 由 schema 自动生成，
     # 里面下拉的类型是 "COMBO" 字符串。若这里塞回旧式 dict（候选列表放在
     # 类型位置），execution.py 走 v3 分支时会在
