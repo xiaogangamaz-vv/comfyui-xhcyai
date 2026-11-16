@@ -462,8 +462,10 @@ class XHCYVideoBase:
     CATEGORY = "XHCY/Video"
     DESCRIPTION = ""
 
-    RETURN_TYPES = ("VIDEO", "STRING", "STRING")
-    RETURN_NAMES = ("video", "status", "video_path")
+    # 第 4 个输出是本次任务号，可接到超分节点的 source_task_id。
+    # 前 3 个插槽顺序固定，不要改名或调换。
+    RETURN_TYPES = ("VIDEO", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("video", "status", "video_path", "task_id")
     FUNCTION = "generate"
     OUTPUT_NODE = False
 
@@ -708,7 +710,7 @@ class XHCYVideoBase:
             f"任务：{task_id}\n"
             f"文件：{path}"
         )
-        return (self._video_object(path), summary, path)
+        return (self._video_object(path), summary, path, task_id)
 
     # ------------------------------------------------------------------ #
 

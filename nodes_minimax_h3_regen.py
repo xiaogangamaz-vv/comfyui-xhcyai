@@ -237,7 +237,7 @@ class XHCYMiniMaxH3Regeneration(XHCYVideoBase):
             f"任务：{task_id}\n"
             f"文件：{path}"
         )
-        return (self._video_object(path), summary, path)
+        return (self._video_object(path), summary, path, task_id)
 
 
 NODE_CLASS_MAPPINGS = {
