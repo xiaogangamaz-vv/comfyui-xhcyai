@@ -1,0 +1,22 @@
+[project]
+name = "xhcyai"
+version = "1.0.0"
+description = "ComfyUI nodes for XHCY AI at https://ai.xhcyai.org"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.28",
+    "numpy>=1.23",
+    "Pillow>=9.0",
+]
+classifiers = [
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/xiaogangamaz-vv/comfyui-xhcyai"
+"Bug Tracker" = "https://github.com/xiaogangamaz-vv/comfyui-xhcyai/issues"
+
+[tool.comfy]
+PublisherId = "xiaogangamaz-vv"
+DisplayName = "comfyui-xhcyai"
