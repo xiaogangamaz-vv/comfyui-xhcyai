@@ -555,6 +555,42 @@ def _http_error(response: requests.Response, context: str) -> XHCYError:
     return XHCYError(f"{context}失败（HTTP {code}）{suffix}")
 
 
+# Methods that may carry a JSON body. GET and HEAD never do: the gateway
+# unmarshals the body whenever Content-Type is application/json, and an empty
+# body fails with unexpected end of JSON input (UnmarshalBodyReusable).
+_JSON_BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+
+def _request_has_body(options: dict[str, Any]) -> bool:
+    """True when this call will put bytes on the wire."""
+    if options.get("json") is not None:
+        return True
+    data = options.get("data")
+    if data is None:
+        return False
+    if isinstance(data, (bytes, bytearray, str)) and len(data) == 0:
+        return False
+    return True
+
+
+def _headers_for_wire(method: str, headers: dict[str, str] | None, *, has_body: bool):
+    """Drop Content-Type on GET and on any request that has no body.
+
+    Callers that already omitted the header are left unchanged. A POST, PUT,
+    or PATCH that really has a body keeps the Content-Type it set.
+    """
+    if not headers:
+        return headers
+    verb = (method or "").upper()
+    if verb in ("GET", "HEAD") or not has_body:
+        return {
+            key: value
+            for key, value in headers.items()
+            if key.lower() != "content-type"
+        }
+    return headers
+
+
 class XHCYClient:
     """One instance per node execution; holds the caller's API key."""
 
@@ -572,9 +608,22 @@ class XHCYClient:
         self._direct = _new_session(trust_env=False)
         self._proxied = _new_session(trust_env=True)
 
-    @property
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+    def _headers(self, method: str = "GET", *, json_body: bool = False) -> dict[str, str]:
+        """Authorization on every call. JSON Content-Type only with a JSON body.
+
+        GET, HEAD, and any request without a body send Accept: application/json
+        and do not send Content-Type. The gateway treats Content-Type
+        application/json as a promise that the body is JSON, then rejects an
+        empty body before the handler runs.
+        """
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Accept": "application/json",
+        }
+        verb = (method or "").upper()
+        if json_body and verb in _JSON_BODY_METHODS:
+            headers["Content-Type"] = "application/json"
+        return headers
 
     def _parse(self, response: requests.Response, context: str) -> dict[str, Any]:
         if response.status_code >= 400:
@@ -596,6 +645,12 @@ class XHCYClient:
         already have accepted the request.
         """
         url = path if path.startswith("http") else self.base_url + path
+        if kwargs.get("headers") is not None:
+            kwargs["headers"] = _headers_for_wire(
+                method,
+                kwargs.get("headers"),
+                has_body=_request_has_body(kwargs),
+            )
         sessions = [self._direct]
         if _environ_proxies(url):
             sessions.append(self._proxied)
@@ -655,11 +710,13 @@ class XHCYClient:
         return self._request_json(
             "POST", path, context, retry=True,
             note="；任务是否已提交无法确认，请先别急着重复提交",
-            headers=self._headers, json=payload,
+            headers=self._headers("POST", json_body=True), json=payload,
         )
 
     def get_json(self, path: str, context: str = "查询") -> dict[str, Any]:
-        return self._request_json("GET", path, context, headers=self._headers)
+        return self._request_json(
+            "GET", path, context, headers=self._headers("GET", json_body=False)
+        )
 
     def download(self, url: str, max_bytes: int = 256 * 1024 * 1024) -> bytes:
         """Fetch a generated artifact.
@@ -676,7 +733,12 @@ class XHCYClient:
             on_gateway = _origin_of(current) == _origin_of(self.base_url)
             response = self._send(
                 "GET", current, "产物下载", note="，请稍后重试",
-                headers=(self._headers if on_gateway else None),
+                # Same-host file GET still needs the bearer token. It has no
+                # JSON body, so it must not claim Content-Type application/json.
+                # Accept is left unset: this response is the file itself.
+                headers=(
+                    {"Authorization": f"Bearer {self.api_key}"} if on_gateway else None
+                ),
                 stream=True,
                 allow_redirects=False,
             )
