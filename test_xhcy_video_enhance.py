@@ -222,10 +222,13 @@ class VideoSuperResolutionNodeTest(unittest.TestCase):
 
     def test_every_video_node_exposes_the_task_id_output(self):
         # The bridge only works if the generation nodes hand the task id onward.
-        self.assertEqual(len(xhcy_video_base.XHCYVideoBase.RETURN_NAMES), 4)
-        self.assertEqual(xhcy_video_base.XHCYVideoBase.RETURN_NAMES[3], "task_id")
-        self.assertEqual(len(enhance.XHCYVideoSuperResolution.RETURN_NAMES), 4)
-        self.assertEqual(enhance.XHCYVideoSuperResolution.RETURN_NAMES[3], "task_id")
+        # task_id is appended; the first three sockets stay video / status / video_path.
+        expected_names = ("video", "status", "video_path", "task_id")
+        expected_types = ("VIDEO", "STRING", "STRING", "STRING")
+        self.assertEqual(xhcy_video_base.XHCYVideoBase.RETURN_NAMES, expected_names)
+        self.assertEqual(xhcy_video_base.XHCYVideoBase.RETURN_TYPES, expected_types)
+        self.assertEqual(enhance.XHCYVideoSuperResolution.RETURN_NAMES, expected_names)
+        self.assertEqual(enhance.XHCYVideoSuperResolution.RETURN_TYPES, expected_types)
 
     def test_node_is_registered_with_its_display_name(self):
         self.assertIn("xhcy_video_enhance", enhance.NODE_CLASS_MAPPINGS)
@@ -303,14 +306,99 @@ class VideoSuperResolutionNodeTest(unittest.TestCase):
         client.submit_video.assert_not_called()
 
     def test_seedance_and_regeneration_nodes_return_four_values(self):
+        import nodes_minimax_h3  # noqa: E402
+        import nodes_minimax_h3_frames  # noqa: E402
         import nodes_minimax_h3_regen  # noqa: E402
         import nodes_seedance  # noqa: E402
 
-        self.assertEqual(len(nodes_seedance.XHCYSeedance2.RETURN_NAMES), 4)
-        self.assertEqual(nodes_seedance.XHCYSeedance2.RETURN_NAMES[3], "task_id")
-        self.assertEqual(
-            len(nodes_minimax_h3_regen.XHCYMiniMaxH3Regeneration.RETURN_NAMES), 4
-        )
+        expected_names = ("video", "status", "video_path", "task_id")
+        expected_types = ("VIDEO", "STRING", "STRING", "STRING")
+        for node_cls in (
+            nodes_seedance.XHCYSeedance2,
+            nodes_minimax_h3.XHCYMiniMaxH3,
+            nodes_minimax_h3_frames.XHCYMiniMaxH3Frames,
+            nodes_minimax_h3_regen.XHCYMiniMaxH3Regeneration,
+        ):
+            self.assertEqual(node_cls.RETURN_NAMES, expected_names)
+            self.assertEqual(node_cls.RETURN_TYPES, expected_types)
+
+        saved = os.path.join(NODE_DIR, "unused.mp4")
+
+        def save_video(cls, raw, task_id):
+            return saved
+
+        with mock.patch.object(
+            xhcy_client.XHCYClient,
+            "submit_video",
+            return_value={"task_id": "task_seedance", "status": "queued"},
+        ), mock.patch.object(
+            xhcy_client.XHCYClient,
+            "poll_video",
+            return_value={
+                "status": "succeeded",
+                "content": {"url": "https://api.example.test/v.mp4"},
+            },
+        ), mock.patch.object(
+            xhcy_client.XHCYClient, "media_bytes", return_value=b"mp4-bytes"
+        ), mock.patch.object(
+            xhcy_video_base.XHCYVideoBase, "_save_video", classmethod(save_video)
+        ), mock.patch.object(
+            xhcy_video_base, "sleep_interruptible", lambda *_a, **_k: None
+        ), mock.patch.object(
+            xhcy_video_base, "check_interrupt", lambda: None
+        ):
+            seedance = nodes_seedance.XHCYSeedance2().generate(
+                prompt="a cat walks",
+                model="doubao-seedance-2-0",
+                api_key="key",
+                resolution="720P",
+                duration=5,
+                ratio="16:9",
+                max_poll_attempts=2,
+                poll_interval=1,
+                base_url="https://api.example.test",
+            )
+        self.assertEqual(len(seedance), 4)
+        self.assertEqual(seedance[1].splitlines()[0], "XHCY 视频生成成功")
+        self.assertEqual(seedance[2], saved)
+        self.assertEqual(seedance[3], "task_seedance")
+
+        with mock.patch.object(
+            xhcy_client.XHCYClient,
+            "submit_video_regeneration",
+            return_value={"task_id": "task_regen", "status": "queued"},
+        ), mock.patch.object(
+            xhcy_client.XHCYClient,
+            "poll_video",
+            return_value={
+                "status": "succeeded",
+                "content": {"url": "https://api.example.test/v.mp4"},
+            },
+        ), mock.patch.object(
+            xhcy_client.XHCYClient, "media_bytes", return_value=b"mp4-bytes"
+        ), mock.patch.object(
+            xhcy_video_base.XHCYVideoBase, "_save_video", classmethod(save_video)
+        ), mock.patch.object(
+            xhcy_video_base, "sleep_interruptible", lambda *_a, **_k: None
+        ), mock.patch.object(
+            xhcy_video_base, "check_interrupt", lambda: None
+        ), mock.patch.object(
+            nodes_minimax_h3_regen, "check_interrupt", lambda: None
+        ):
+            regen = nodes_minimax_h3_regen.XHCYMiniMaxH3Regeneration().generate(
+                api_key="key",
+                model="MiniMax-H3",
+                source_task_id="task_source",
+                prompt="",
+                duration=5,
+                max_poll_attempts=2,
+                poll_interval=1,
+                base_url="https://api.example.test",
+            )
+        self.assertEqual(len(regen), 4)
+        self.assertIn("再生成成功", regen[1])
+        self.assertEqual(regen[2], saved)
+        self.assertEqual(regen[3], "task_regen")
 
 
 if __name__ == "__main__":

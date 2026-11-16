@@ -266,6 +266,7 @@ class XHCYMiniMaxH3Reference(io.ComfyNode, XHCYVideoBase):
                 io.Video.Output(display_name="video"),
                 io.String.Output(display_name="status"),
                 io.String.Output(display_name="video_path"),
+                io.String.Output(display_name="task_id"),
             ],
         )
 
