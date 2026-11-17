@@ -63,11 +63,24 @@ function getWidget(node, name) {
     return node.widgets?.find((item) => item.name === name) || null;
 }
 
+function assignWidgetValue(node, widget, value) {
+    if (!widget || Object.is(widget.value, value) || widget.__xhcyWritingValue) return;
+    widget.__xhcyWritingValue = true;
+    const alreadyConfiguring = node.__xhcyBalanceConfiguring === true;
+    node.__xhcyBalanceConfiguring = true;
+    try {
+        widget.value = value;
+    } finally {
+        widget.__xhcyWritingValue = false;
+        node.__xhcyBalanceConfiguring = alreadyConfiguring;
+    }
+}
+
 function clearApiKeyWidget(node) {
     const widget = getWidget(node, "api_key");
     if (!widget) return;
 
-    widget.value = "";
+    assignWidgetValue(node, widget, "");
     widget.serialize = false;
 }
 
@@ -106,11 +119,11 @@ function normalizePollingWidget(node, name, fallback, minimum, maximum) {
         value < minimum ||
         value > maximum
     ) {
-        widget.value = fallback;
+        assignWidgetValue(node, widget, fallback);
         return true;
     }
 
-    widget.value = value;
+    assignWidgetValue(node, widget, value);
     return false;
 }
 
@@ -162,16 +175,26 @@ function repairGenerationWidgets(node) {
         changed = true;
     }
 
-    ratioWidget.value = ratio;
-    sizeWidget.value = size;
+    assignWidgetValue(node, ratioWidget, ratio);
+    assignWidgetValue(node, sizeWidget, size);
     if (replyWidget) {
-        replyWidget.value = reply;
+        assignWidgetValue(node, replyWidget, reply);
     }
 
     return changed;
 }
 
 function repairNodeState(node) {
+    if (node.__xhcyBalanceRepairing) return;
+    node.__xhcyBalanceRepairing = true;
+    try {
+        repairNodeStateBody(node);
+    } finally {
+        node.__xhcyBalanceRepairing = false;
+    }
+}
+
+function repairNodeStateBody(node) {
     const changedGeneration = repairGenerationWidgets(node);
     const changedAttempts = normalizePollingWidget(
         node,
@@ -532,13 +555,20 @@ app.registerExtension({
         const originalExecuted = nodeType.prototype.onExecuted;
 
         nodeType.prototype.onConfigure = function () {
-            const result = originalConfigure?.apply(this, arguments);
+            // 清空 key、修复旧控件顺序或规范化轮询值都会同步再次进入这里。
+            if (this.__xhcyBalanceConfiguring) return;
+            this.__xhcyBalanceConfiguring = true;
+            try {
+                const result = originalConfigure?.apply(this, arguments);
 
-            removeRestoredApiKeyFromConfig(this, arguments[0]);
-            clearApiKeyAfterWorkflowRestore(this);
-            scheduleRepairPasses(this);
+                removeRestoredApiKeyFromConfig(this, arguments[0]);
+                clearApiKeyAfterWorkflowRestore(this);
+                scheduleRepairPasses(this);
 
-            return result;
+                return result;
+            } finally {
+                this.__xhcyBalanceConfiguring = false;
+            }
         };
 
         nodeType.prototype.onNodeCreated = function () {
