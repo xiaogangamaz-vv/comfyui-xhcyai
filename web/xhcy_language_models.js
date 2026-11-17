@@ -50,11 +50,20 @@ function modelWidget(node) {
 
 function ownValues(widget) {
     const options = widget.options || (widget.options = {});
-    if (!options.__xhcyOwned) {
-        options.values = Array.isArray(options.values) ? options.values.slice() : [];
-        options.__xhcyOwned = true;
+    if (options.__xhcyOwned) return options.values;
+    // 替换 values 会同步再次进入配置。占位后直接返回，避免在标记完成前递归。
+    if (options.__xhcyOwning) {
+        return Array.isArray(options.values) ? options.values : [];
     }
-    return options.values;
+    options.__xhcyOwning = true;
+    try {
+        const current = options.values;
+        options.values = Array.isArray(current) ? current.slice() : [];
+        options.__xhcyOwned = true;
+        return options.values;
+    } finally {
+        options.__xhcyOwning = false;
+    }
 }
 
 function savedModelValue(info) {
@@ -130,9 +139,14 @@ function relaxModelField(nodeElement) {
 function applyWidth(node) {
     const minWidth = minimumNodeWidth(node);
     node.__xhcyMinWidth = minWidth;
-    if (node.size && node.size[0] < minWidth) {
-        if (typeof node.setSize === "function") node.setSize([minWidth, node.size[1]]);
-        else node.size[0] = minWidth;
+    if (node.size && node.size[0] < minWidth && !node.__xhcyApplyingWidth) {
+        node.__xhcyApplyingWidth = true;
+        try {
+            if (typeof node.setSize === "function") node.setSize([minWidth, node.size[1]]);
+            else node.size[0] = minWidth;
+        } finally {
+            node.__xhcyApplyingWidth = false;
+        }
     }
     whenNodeElement(node, (element) => {
         element.dataset.xhcyNode = nodeTypeName(node);
@@ -156,10 +170,18 @@ function enforceMinWidth(node) {
     };
     const originalResize = node.onResize;
     node.onResize = function onResize(size) {
-        if (size && this.__xhcyMinWidth && size[0] < this.__xhcyMinWidth) {
-            size[0] = this.__xhcyMinWidth;
+        if (this.__xhcyResizing) {
+            return originalResize ? originalResize.apply(this, arguments) : undefined;
         }
-        return originalResize ? originalResize.apply(this, arguments) : undefined;
+        this.__xhcyResizing = true;
+        try {
+            if (size && this.__xhcyMinWidth && size[0] < this.__xhcyMinWidth) {
+                size[0] = this.__xhcyMinWidth;
+            }
+            return originalResize ? originalResize.apply(this, arguments) : undefined;
+        } finally {
+            this.__xhcyResizing = false;
+        }
     };
 }
 
@@ -173,15 +195,31 @@ function configureModelWidget(node) {
     enforceMinWidth(node);
 }
 
+function writeModelValue(widget, saved) {
+    if (!widget || widget.value === saved || widget.__xhcyWritingValue) return;
+    widget.__xhcyWritingValue = true;
+    try {
+        widget.value = saved;
+    } finally {
+        widget.__xhcyWritingValue = false;
+    }
+}
+
 function retainSavedModel(node, saved) {
     if (!saved) return;
     const apply = () => {
-        const widget = modelWidget(node);
-        if (!widget) return;
-        const values = ownValues(widget);
-        if (!values.includes(saved)) values.push(saved);
-        configureModelWidget(node);
-        if (widget.value !== saved) widget.value = saved;
+        if (node.__xhcyRetainingModel) return;
+        node.__xhcyRetainingModel = true;
+        try {
+            const widget = modelWidget(node);
+            if (!widget) return;
+            const values = ownValues(widget);
+            if (!values.includes(saved)) values.push(saved);
+            configureModelWidget(node);
+            writeModelValue(widget, saved);
+        } finally {
+            node.__xhcyRetainingModel = false;
+        }
     };
     apply();
     queueMicrotask(apply);
@@ -393,17 +431,24 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (!TARGET_NODES.has(nodeData?.name)) return;
         const onNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function onNodeCreated() {
+        nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
             configureModelWidget(this);
             return result;
         };
         const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function onConfigure(info) {
-            const result = onConfigure?.apply(this, arguments);
-            retainSavedModel(this, savedModelValue(info));
-            configureModelWidget(this);
-            return result;
+        nodeType.prototype.onConfigure = function (info) {
+            // 写入已保存模型或调整宽度会同步再次进入这里。同一轮直接返回。
+            if (this.__xhcyConfiguring || this.__xhcyRetainingModel) return;
+            this.__xhcyConfiguring = true;
+            try {
+                const result = onConfigure?.apply(this, arguments);
+                retainSavedModel(this, savedModelValue(info));
+                configureModelWidget(this);
+                return result;
+            } finally {
+                this.__xhcyConfiguring = false;
+            }
         };
     },
     nodeCreated(node) {
