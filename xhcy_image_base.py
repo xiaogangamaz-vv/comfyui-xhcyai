@@ -392,6 +392,10 @@ class XHCYImageBase:
             raise XHCYError(f"不支持的画幅组合：{aspect_ratio} × {resolution}")
         return size
 
+    def allows_model_fallback(self, model: str) -> bool:
+        """解析失败时是否允许换成同家族其它变体。默认允许。"""
+        return True
+
     @classmethod
     def suggest_models(cls, aspect_ratio: str, resolution: str) -> list[str]:
         """哪些变体支持这个 (画幅, 档位)。用于报错时直接给出可选项。"""
@@ -541,7 +545,9 @@ class XHCYImageBase:
                 # 档位是很自然的事；直接报错就得手动改下拉，批量跑尤其难受。
                 # 这里自动挑一个支持的变体，并把「换成了谁」写进输出，保持透明。
                 fallback = None
-                if self.AUTO_MODEL_FALLBACK:
+                # 个别变体（nano-banana-pro）必须保持用户选中的 model。
+                # 解析失败时直接抛出原来的错误，不要静默换成同家族的其它变体。
+                if self.AUTO_MODEL_FALLBACK and self.allows_model_fallback(model):
                     candidates = [
                         m
                         for m in self.suggest_models(aspect_ratio, resolution)
