@@ -142,6 +142,36 @@ class ImageParserTests(unittest.TestCase):
         self.assertIn("reply_type", banana)
         self.assertIn("quality", gpt)
 
+    def test_nano_banana_pro_dropdown_covers_official_ratios_without_google_extras(self):
+        ratios = [
+            "auto", "1:1", "2:3", "3:2", "3:4", "4:3",
+            "4:5", "5:4", "9:16", "16:9", "21:9",
+        ]
+        banana = XHCYNanoBanana.INPUT_TYPES()["required"]
+        self.assertEqual(list(banana["aspect_ratio"][0]), ratios)
+        self.assertEqual(list(banana["image_size"][0]), ["1K", "2K", "4K"])
+        for extra in ("1:4", "4:1", "1:8", "8:1"):
+            self.assertNotIn(extra, banana["aspect_ratio"][0])
+        self.assertIn("nano-banana-pro", XHCYNanoBanana.ASPECT_PARAM_MODELS)
+        self.assertNotIn("nano-banana-pro", XHCYNanoBanana.MODEL_SIZES)
+        self.assertEqual(XHCYNanoBanana.QUALITIES, [])
+        copy = "\n".join((
+            XHCYNanoBanana.MODEL_TOOLTIP,
+            XHCYNanoBanana.RATIO_TOOLTIP,
+            XHCYNanoBanana.RESOLUTION_TOOLTIP,
+        ))
+        self.assertNotIn("选 2K/4K 时节点会自动换成 nano-banana-2", copy)
+        self.assertNotIn("选 nano-banana-pro 又选 2K/4K 时，节点会自动换成 nano-banana-2", copy)
+        self.assertEqual(XHCYNanoBanana.resolve_size("auto", "4K", "nano-banana-pro"), "auto")
+        self.assertEqual(XHCYNanoBanana.resolve_size("3:4", "4K", "nano-banana-pro"), "3:4@4K")
+        self.assertEqual(
+            XHCYNanoBanana.resolve_size("auto", "1K", "gemini-2.5-flash-image"),
+            "1024x1024",
+        )
+        node = XHCYNanoBanana()
+        self.assertFalse(node.allows_model_fallback("nano-banana-pro"))
+        self.assertTrue(node.allows_model_fallback("gemini-2.5-flash-image"))
+
     def test_quality_predicates(self):
         for name in (
             "nano-banana-2",
@@ -620,6 +650,72 @@ class GeneratePathTests(unittest.TestCase):
         )
         self.assertNotIn("quality", self.calls[0][2])
         self.assertNotIn("response_format", self.calls[0][2])
+
+    def test_nano_banana_pro_keeps_model_and_aspect_payload(self):
+        ratios = [
+            "auto", "1:1", "2:3", "3:2", "3:4", "4:3",
+            "4:5", "5:4", "9:16", "16:9", "21:9",
+        ]
+        done = {"id": "task-pro", "status": "succeeded", "data": [{"b64_json": RED_B64}]}
+        for ratio in ratios:
+            for size in ("1K", "2K", "4K"):
+                with self.subTest(ratio=ratio, size=size):
+                    self.calls.clear()
+                    result = self._run(
+                        XHCYNanoBanana(),
+                        responses=[dict(done)],
+                        model="nano-banana-pro",
+                        aspect_ratio=ratio,
+                        image_size=size,
+                        quality="high",
+                    )
+                    body = self.calls[0][2]
+                    self.assertEqual(body["model"], "nano-banana-pro")
+                    self.assertEqual(body["image_size"], size)
+                    self.assertNotIn("size", body)
+                    self.assertNotIn("quality", body)
+                    if ratio == "auto":
+                        self.assertNotIn("aspect_ratio", body)
+                    else:
+                        self.assertEqual(body["aspect_ratio"], ratio)
+                    self.assertIn("nano-banana-pro", result[1])
+                    self.assertNotIn("nano-banana-2", result[1])
+                    self.assertNotIn("已自动把 model", result[1])
+                    self.assertNotIn("1024x1024", result[1])
+
+    def test_pro_unresolved_combo_errors_without_swapping_model(self):
+        def reject_pro(self, aspect_ratio, resolution, model=None):
+            if model == "nano-banana-pro":
+                raise XHCYError(f"{model} 不支持「{aspect_ratio} + {resolution}」。")
+            return XHCYImageBase.resolve_size(aspect_ratio, resolution, model)
+
+        calls = []
+
+        def request(session, method, url, **req_kwargs):
+            calls.append(req_kwargs.get("json"))
+            return _Resp({"status": "succeeded", "data": [{"b64_json": RED_B64}]})
+
+        with mock.patch.object(XHCYNanoBanana, "resolve_size", reject_pro), mock.patch.object(
+            requests.Session, "request", request
+        ):
+            with self.assertRaises(XHCYError) as caught:
+                XHCYNanoBanana().generate(
+                    prompt="a red square",
+                    model="nano-banana-pro",
+                    api_key="sk-test",
+                    max_poll_attempts=2,
+                    poll_interval=1,
+                    base_url="https://example.invalid",
+                    aspect_ratio="3:4",
+                    image_size="4K",
+                )
+        message = str(caught.exception)
+        self.assertIn("nano-banana-pro", message)
+        self.assertIn("3:4", message)
+        self.assertIn("4K", message)
+        self.assertNotIn("nano-banana-2", message)
+        self.assertNotIn("已自动把 model", message)
+        self.assertEqual(calls, [])
 
 
 class GatewayReachabilityTests(unittest.TestCase):
