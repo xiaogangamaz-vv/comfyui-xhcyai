@@ -13,6 +13,7 @@ const CURRENT_MODELS = {
         "gemini-3.8-flash",
         "gpt-6.1-sol",
         "kimi-k3.1-pro",
+        "gpt-6.2-sol",
         "deepseek-v4.1-flash",
         "deepseek-v4.1-flash-1017",
         "deepseek-v4-flash",

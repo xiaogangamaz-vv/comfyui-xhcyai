@@ -1,7 +1,9 @@
 """XHCY AI text / chat node.
 
-语言模型下拉已于 2026-11-16 按
-GET https://ai.xhcyai.org/api/public-models 同步，只保留当时公开的语言 / 对话模型。
+语言模型下拉已于 2026-11-24 按
+GET https://ai.xhcyai.org/api/public-models 同步。
+在 2026-11-16 的清单上补了 gpt-6.2-sol。
+它的看图能力还没有公开约定，接了图片会在提交前停下，不会改成别的模型。
 已移除不再发布的 claude-fable-5、claude-fable-5-1、claude-opus-5-5，
 并加入 kimi-k3.1-pro。
 
@@ -38,17 +40,19 @@ except ImportError:  # allow running this file standalone for debugging
     from xhcy_credentials import resolve_credentials  # type: ignore
 
 
-# 2026-11-16 按 GET https://ai.xhcyai.org/api/public-models 同步。
-# 只保留当时公开的语言 / 对话模型。顺序与分析节点里重叠的三项一致。
+# 2026-11-24 按 GET https://ai.xhcyai.org/api/public-models 同步。
+# 前三项与分析节点一致。gpt-6.2-sol 只进对话节点，不进分析节点。
 MODEL_LIST = [
     "gemini-3.8-flash",
     "gpt-6.1-sol",
     "kimi-k3.1-pro",
+    "gpt-6.2-sol",
     "deepseek-v4.1-flash",
     "deepseek-v4.1-flash-1017",
     "deepseek-v4-flash",
     "deepseek-v4-pro",
 ]
+TEXT_ONLY_MODELS = ("gpt-6.2-sol",)
 
 DEFAULT_MODEL = "gemini-3.8-flash"
 
@@ -184,6 +188,11 @@ class XHCYChat:
             messages.append({"role": "system", "content": system_text})
 
         batch = kwargs.get("image")
+        if batch is not None and model in TEXT_ONLY_MODELS:
+            raise XHCYError(
+                f"{model} 的看图能力尚未确认，本次不会提交。"
+                "请去掉图片后再用这个模型，或改选当前分析节点里的视觉模型。"
+            )
         if batch is not None:
             if not hasattr(batch, "ndim"):
                 raise XHCYError("image 必须是 ComfyUI 的 IMAGE 输入")

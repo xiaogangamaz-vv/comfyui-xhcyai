@@ -34,6 +34,7 @@ ANALYZE_MODELS = [
     "kimi-k3.1-pro",
 ]
 CHAT_MODELS = ANALYZE_MODELS + [
+    "gpt-6.2-sol",
     "deepseek-v4.1-flash",
     "deepseek-v4.1-flash-1017",
     "deepseek-v4-flash",
@@ -76,12 +77,13 @@ class LanguageModelListTests(unittest.TestCase):
             "deepseek-v4-pro",
             "deepseek-v4.1-flash",
             "deepseek-v4.1-flash-1017",
+            "gpt-6.2-sol",
             "gpt-image-2",
             "MiniMax-H3",
         ):
             self.assertNotIn(model_id, combo)
 
-    def test_chat_lists_seven_public_ids_and_keeps_raw_delisted_values(self):
+    def test_chat_lists_public_ids_and_keeps_raw_delisted_values(self):
         self.assertEqual(nodes_llm.MODEL_LIST, CHAT_MODELS)
         self.assertEqual(nodes_llm.DEFAULT_MODEL, "gemini-3.8-flash")
         combo = XHCYChat.INPUT_TYPES()["required"]["model"][0]
@@ -100,6 +102,7 @@ class LanguageModelListTests(unittest.TestCase):
             "deepseek-v4-pro",
             "deepseek-v4.1-flash",
             "deepseek-v4.1-flash-1017",
+            "gpt-6.2-sol",
         ):
             self.assertNotIn(model_id, analyze_block)
         for model_id in CHAT_MODELS + DELISTED:
@@ -262,6 +265,20 @@ class ChatBehaviorTests(unittest.TestCase):
         self.assertEqual(text, "好的")
         self.assertEqual(capture.payloads[0]["model"], "deepseek-v4-flash")
         self.assertIn("deepseek-v4-flash", status)
+
+    def test_gpt_62_sol_is_sent_as_text_and_not_with_an_image(self):
+        node = XHCYChat()
+        capture = _Capture("好的").install(nodes_llm)
+        text, _status = node.chat("你好", "gpt-6.2-sol", "k", "", 0.7, 0)
+        self.assertEqual(text, "好的")
+        self.assertEqual(capture.payloads[0]["model"], "gpt-6.2-sol")
+        self.assertEqual(capture.payloads[0]["messages"][0]["content"], "你好")
+
+        with self.assertRaises(XHCYError) as caught:
+            node.chat("看这张图", "gpt-6.2-sol", "k", "", 0.7, 0, image=_Batch())
+        self.assertIn("不会提交", str(caught.exception))
+        self.assertIn("gpt-6.2-sol", str(caught.exception))
+        self.assertEqual(len(capture.payloads), 1)
 
 
 if __name__ == "__main__":

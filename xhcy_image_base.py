@@ -201,6 +201,8 @@ class XHCYImageBase:
     # 而不是像素框（size）。这些变体因此能出 2K / 4K，不受 10 个 1K 框限制。
     # 站点 2026-10-26 实测：2:3@2K、9:16@2K、16:9@4K 均 200 出图。
     ASPECT_PARAM_MODELS: list[str] = []
+    # 这些变体在画幅为 auto 时要提交字面量 size=auto，不能把 size 省掉。
+    LITERAL_AUTO_SIZE_MODELS: tuple[str, ...] = ()
     SIZES: list[str] = ["auto", "1024x1024", "1536x1024", "1024x1536"]
     QUALITIES: list[str] = ["auto", "low", "medium", "high"]
     RATIOS: list[str] = [
@@ -396,6 +398,10 @@ class XHCYImageBase:
         """解析失败时是否允许换成同家族其它变体。默认允许。"""
         return True
 
+    def guard_request(self, model, aspect_ratio, resolution, quality) -> None:
+        """提交前的最后一道检查。子类在这里拦住尚未开放或不属于该模型的参数。"""
+        return None
+
     @classmethod
     def suggest_models(cls, aspect_ratio: str, resolution: str) -> list[str]:
         """哪些变体支持这个 (画幅, 档位)。用于报错时直接给出可选项。"""
@@ -564,6 +570,9 @@ class XHCYImageBase:
                 )
                 model = fallback
 
+        # 尺寸已经定下来，但请求还没发出。不支持的画质或未开放的比例在这里停下。
+        self.guard_request(model, aspect_ratio, resolution, quality)
+
         attempts = _int_param(max_poll_attempts, "最大查询次数", 1, 600)
         interval = _int_param(poll_interval, "查询间隔", 1, 60)
 
@@ -588,6 +597,8 @@ class XHCYImageBase:
                 payload["aspect_ratio"] = aspect_ratio
             if resolution:
                 payload["image_size"] = str(resolution).upper()
+        elif size == "auto" and model in self.LITERAL_AUTO_SIZE_MODELS:
+            payload["size"] = "auto"
         elif size != "auto":
             payload["size"] = size
         # banana / gemini image（含 gemini-3.1-flash-image-preview）传 quality
