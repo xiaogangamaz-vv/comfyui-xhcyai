@@ -335,7 +335,17 @@ class ComfyuiXinghuoNanoBanana:
                 "prompt": ("STRING", {"multiline": True, "default": ""}),
                 "model": (_MODEL_LIST, {"default": "nano-banana-2"}),
                 "api_key": ("STRING", {"default": "", "multiline": False, "defaultInput": True, "tooltip": "可直接填写，或连接 TEXT/STRING 节点"}),
-                "aspect_ratio": (_BASE_RATIOS + _EXTENDED_RATIOS, {"default": "1:1"}),
+                "aspect_ratio": (
+                    _BASE_RATIOS + _EXTENDED_RATIOS,
+                    {
+                        "default": "1:1",
+                        "tooltip": (
+                            "1:4、4:1、1:8、8:1 只为 nano-banana-2 和 "
+                            "gemini-nano-banana-2.1 预留，站点尚未开放，选中后不会提交。"
+                            "nano-banana-pro 和 gemini-2.5-flash-image 不接受这些比例，也不会换模。"
+                        ),
+                    },
+                ),
                 "image_size": (_IMAGE_SIZE_LIST, {"default": "1K"}),
                 # Retained solely to keep existing workflows' widget positions stable.
                 # The documented draw endpoint always uses webHook='-1' polling below.
@@ -538,7 +548,17 @@ class ComfyuiXinghuoNanoBananaV3(ComfyuiXinghuoNanoBanana):
                         "tooltip": "可直接填写，或连接 TEXT/STRING 节点",
                     },
                 ),
-                "aspect_ratio": (_BASE_RATIOS + _EXTENDED_RATIOS, {"default": "1:1"}),
+                "aspect_ratio": (
+                    _BASE_RATIOS + _EXTENDED_RATIOS,
+                    {
+                        "default": "1:1",
+                        "tooltip": (
+                            "1:4、4:1、1:8、8:1 只为 nano-banana-2 和 "
+                            "gemini-nano-banana-2.1 预留，站点尚未开放，选中后不会提交。"
+                            "nano-banana-pro 和 gemini-2.5-flash-image 不接受这些比例，也不会换模。"
+                        ),
+                    },
+                ),
                 "image_size": (_IMAGE_SIZE_LIST, {"default": "1K"}),
                 "max_poll_attempts": ("INT", {"default": 300, "min": 1, "max": 1000}),
                 "poll_interval": ("INT", {"default": 5, "min": 1, "max": 60}),

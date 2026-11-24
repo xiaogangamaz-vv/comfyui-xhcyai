@@ -26,7 +26,7 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点。
 
 **图像**
 
-- GPT Image 2、GPT Image 2.5：文生图 / 多图参考
+- GPT Image 2、GPT Image 2.5、GPT Image 2.6：文生图 / 多图参考
 - Nano Banana：文生图 / 多图参考
 - Seedream 5.0：文生图 / 多图参考 / 图层拆分
 
@@ -49,3 +49,6 @@ XHCY AI（[ai.xhcyai.org](https://ai.xhcyai.org)）的 ComfyUI 节点。
 - 部分网络下调用网关时，未完成的握手会重试，已发出的请求不会再提交一次。
 - Nano Banana 图像结果支持内嵌图片，并改为提交后轮询。
 - 增加视频超分节点；访问密钥留空时可以使用本机已保存的密钥。
+- 文本下拉增加 gpt-6.2-sol。看图能力未确认，接了图片不会提交。
+- GPT Image 下拉增加 gpt-image-2.6-flare 与 gpt-image-2.6-sunburst。画幅 auto 提交 size=auto；画质只提交 auto / low / medium / high。
+- nano-banana-2 与 gemini-nano-banana-2.1 预留 1:4、4:1、1:8、8:1。站点尚未开放，选中后不会提交。nano-banana-pro 与 gemini-2.5-flash-image 不接受这些比例，也不会换模。

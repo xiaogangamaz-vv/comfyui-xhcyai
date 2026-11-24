@@ -15,10 +15,16 @@ except ImportError:  # allow running this file standalone for debugging
 
 
 # 画幅候选（取各模型声明过的并集；auto 交给服务端）
-_ASPECT_RATIOS = [
+# 后面四个比例只为 nano-banana-2 与 gemini-nano-banana-2.1 预留。
+# 站点尚未开放，选中后在提交前停下，不会发出请求。
+# nano-banana-pro 与 gemini-2.5-flash-image 不接受它们，也不会换模。
+_OFFICIAL_ASPECT_RATIOS = [
     "auto", "1:1", "2:3", "3:2", "3:4", "4:3",
     "4:5", "5:4", "9:16", "16:9", "21:9",
 ]
+_PENDING_ASPECT_RATIOS = ("1:4", "4:1", "1:8", "8:1")
+_PENDING_ASPECT_MODELS = ("nano-banana-2", "gemini-nano-banana-2.1")
+_ASPECT_RATIOS = list(_OFFICIAL_ASPECT_RATIOS) + list(_PENDING_ASPECT_RATIOS)
 
 # nano-banana-2、gemini-nano-banana-2.1、nano-banana-pro
 # 都用 aspect_ratio + image_size 表达输出，1K / 2K / 4K 三档全部生效。
@@ -120,7 +126,10 @@ class XHCYNanoBanana(XHCYImageBase):
         "非 auto 提交 aspect_ratio + image_size；auto 只提交 image_size\n"
         "· gemini-2.5-flash-image 只有 1K。"
         "选到它做不到的组合时，节点会自动换一个能做的变体并在输出里写明。\n"
-        "选 nano-banana-pro 时不会自动换模；组合无法解析会直接报错。"
+        "选 nano-banana-pro 时不会自动换模；组合无法解析会直接报错。\n"
+        "· 1:4、4:1、1:8、8:1 只为 nano-banana-2 与 gemini-nano-banana-2.1 预留，"
+        "站点尚未开放。选中后不会提交。"
+        "nano-banana-pro 与 gemini-2.5-flash-image 不接受这些比例，也不会换模。"
     )
     RESOLUTION_TOOLTIP = (
         "分辨率档位。\n"
@@ -153,10 +162,29 @@ class XHCYNanoBanana(XHCYImageBase):
 
         比例+档位变体（含 nano-banana-pro）不折成像素：
         auto 只留给 image_size，不传 aspect_ratio，也不再写成 size=1024x1024。
+        预留比例在这里直接拒绝，避免落到基类后被当成已支持的比例发出去。
         """
+        if aspect_ratio in _PENDING_ASPECT_RATIOS:
+            if model in _PENDING_ASPECT_MODELS:
+                raise XHCYError(
+                    f"{model} 的画面比例 {aspect_ratio} 已预留，站点尚未开放。"
+                    "本次不会提交。"
+                )
+            name = model or "当前模型"
+            raise XHCYError(
+                f"{name} 不支持画面比例 {aspect_ratio}。"
+                "不会改用其它模型，也不会提交。"
+            )
         if aspect_ratio == "auto" and not (model and model in cls.ASPECT_PARAM_MODELS):
             return "1024x1024"
         return super().resolve_size(aspect_ratio, resolution, model)
+
+    @classmethod
+    def suggest_models(cls, aspect_ratio: str, resolution: str) -> list[str]:
+        """预留比例没有可替换的变体。不能借 pro 或 2.5 的回退把请求发出去。"""
+        if aspect_ratio in _PENDING_ASPECT_RATIOS:
+            return []
+        return super().suggest_models(aspect_ratio, resolution)
 
     def allows_model_fallback(self, model: str) -> bool:
         """控件选了 nano-banana-pro 就必须提交 pro。解析失败直接报错，不静默换模。"""

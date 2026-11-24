@@ -148,10 +148,11 @@ class ImageParserTests(unittest.TestCase):
             "4:5", "5:4", "9:16", "16:9", "21:9",
         ]
         banana = XHCYNanoBanana.INPUT_TYPES()["required"]
-        self.assertEqual(list(banana["aspect_ratio"][0]), ratios)
+        pending = ["1:4", "4:1", "1:8", "8:1"]
+        self.assertEqual(list(banana["aspect_ratio"][0]), ratios + pending)
         self.assertEqual(list(banana["image_size"][0]), ["1K", "2K", "4K"])
-        for extra in ("1:4", "4:1", "1:8", "8:1"):
-            self.assertNotIn(extra, banana["aspect_ratio"][0])
+        self.assertIn("站点尚未开放", XHCYNanoBanana.RATIO_TOOLTIP)
+        self.assertIn("不会换模", XHCYNanoBanana.RATIO_TOOLTIP)
         self.assertIn("nano-banana-pro", XHCYNanoBanana.ASPECT_PARAM_MODELS)
         self.assertNotIn("nano-banana-pro", XHCYNanoBanana.MODEL_SIZES)
         self.assertEqual(XHCYNanoBanana.QUALITIES, [])
@@ -650,6 +651,170 @@ class GeneratePathTests(unittest.TestCase):
         )
         self.assertNotIn("quality", self.calls[0][2])
         self.assertNotIn("response_format", self.calls[0][2])
+
+    def test_gpt_image_26_uses_the_literal_auto_size_and_blocks_extra_quality(self):
+        done = {"status": "succeeded", "data": [{"b64_json": RED_B64}]}
+        models = XHCYGPTImage25.INPUT_TYPES()["required"]["model"][0]
+        self.assertEqual(
+            list(models),
+            [
+                "gpt-image-2.5",
+                "gpt-image-2.5-flare",
+                "gpt-image-2.5-sunburst",
+                "gpt-image-2.6-flare",
+                "gpt-image-2.6-sunburst",
+            ],
+        )
+        self.assertFalse(XHCYGPTImage25().allows_model_fallback("gpt-image-2.6-flare"))
+        self.assertFalse(XHCYGPTImage25().allows_model_fallback("gpt-image-2.6-sunburst"))
+        self.assertTrue(XHCYGPTImage25().allows_model_fallback("gpt-image-2.5-flare"))
+        for size in XHCYGPTImage25.SIZE_MAP.values():
+            width, height = (int(part) for part in size.split("x"))
+            pixels = width * height
+            self.assertEqual(width % 16, 0, size)
+            self.assertEqual(height % 16, 0, size)
+            self.assertLessEqual(max(width, height), 3840, size)
+            self.assertLessEqual(max(width, height) / min(width, height), 3, size)
+            self.assertGreaterEqual(pixels, 655360, size)
+            self.assertLessEqual(pixels, 8294400, size)
+
+        self._run(
+            XHCYGPTImage25(),
+            responses=[done],
+            model="gpt-image-2.6-flare",
+            aspect_ratio="auto",
+            resolution="4k",
+            quality="auto",
+        )
+        body = self.calls[0][2]
+        self.assertEqual(body["model"], "gpt-image-2.6-flare")
+        self.assertEqual(body["size"], "auto")
+        self.assertNotIn("quality", body)
+
+        self.calls.clear()
+        self._run(
+            XHCYGPTImage25(),
+            responses=[dict(done)],
+            model="gpt-image-2.6-sunburst",
+            aspect_ratio="16:9",
+            resolution="4k",
+            quality="high",
+        )
+        body = self.calls[0][2]
+        self.assertEqual(body["model"], "gpt-image-2.6-sunburst")
+        self.assertEqual(body["size"], "3840x2160")
+        self.assertEqual(body["quality"], "high")
+
+        self.calls.clear()
+        self._run(
+            XHCYGPTImage25(),
+            responses=[dict(done)],
+            model="gpt-image-2.6-flare",
+            aspect_ratio="1:1",
+            resolution="2k",
+            quality="medium",
+        )
+        body = self.calls[0][2]
+        self.assertEqual(body["model"], "gpt-image-2.6-flare")
+        self.assertEqual(body["size"], "2048x2048")
+        self.assertEqual(body["quality"], "medium")
+
+        self.calls.clear()
+        self._run(
+            XHCYGPTImage25(),
+            responses=[dict(done)],
+            model="gpt-image-2.5-sunburst",
+            aspect_ratio="1:1",
+            resolution="1k",
+            quality="xhigh",
+        )
+        self.assertEqual(self.calls[0][2]["model"], "gpt-image-2.5-sunburst")
+        self.assertEqual(self.calls[0][2]["quality"], "xhigh")
+
+        self.calls.clear()
+        self._run(
+            XHCYGPTImage25(),
+            responses=[dict(done)],
+            model="gpt-image-2.5-flare",
+            aspect_ratio="auto",
+            resolution="1k",
+            quality="low",
+        )
+        self.assertNotIn("size", self.calls[0][2])
+        self.assertEqual(self.calls[0][2]["quality"], "low")
+        self.assertEqual(self.calls[0][2]["model"], "gpt-image-2.5-flare")
+
+        for model, quality in (
+            ("gpt-image-2.6-flare", "xhigh"),
+            ("gpt-image-2.6-sunburst", "max"),
+        ):
+            self.calls.clear()
+            with self.assertRaises(XHCYError) as caught:
+                self._run(
+                    XHCYGPTImage25(),
+                    responses=[dict(done)],
+                    model=model,
+                    aspect_ratio="1:1",
+                    resolution="1k",
+                    quality=quality,
+                )
+            self.assertIn("不会提交", str(caught.exception))
+            self.assertIn(model, str(caught.exception))
+            self.assertEqual(self.calls, [])
+
+        self.calls.clear()
+        with self.assertRaises(XHCYError) as caught:
+            self._run(
+                XHCYGPTImage25(),
+                responses=[dict(done)],
+                model="gpt-image-2.6-flare",
+                aspect_ratio="7:5",
+                resolution="1k",
+                quality="high",
+            )
+        self.assertNotIn("已自动把 model", str(caught.exception))
+        self.assertEqual(self.calls, [])
+
+    def test_pending_banana_ratios_do_not_submit_or_switch_model(self):
+        done = {"status": "succeeded", "data": [{"b64_json": RED_B64}]}
+        for model, ratio in (
+            ("nano-banana-2", "1:4"),
+            ("gemini-nano-banana-2.1", "8:1"),
+            ("nano-banana-pro", "4:1"),
+            ("gemini-2.5-flash-image", "1:8"),
+        ):
+            self.calls.clear()
+            with self.assertRaises(XHCYError) as caught:
+                self._run(
+                    XHCYNanoBanana(),
+                    responses=[dict(done)],
+                    model=model,
+                    aspect_ratio=ratio,
+                    image_size="2K",
+                )
+            message = str(caught.exception)
+            self.assertIn(model, message)
+            self.assertIn(ratio, message)
+            self.assertIn("不会提交", message)
+            self.assertEqual(self.calls, [])
+            if model in ("nano-banana-2", "gemini-nano-banana-2.1"):
+                self.assertIn("尚未开放", message)
+            else:
+                self.assertIn("不会改用其它模型", message)
+                self.assertNotIn("尚未开放", message)
+
+        self.calls.clear()
+        self._run(
+            XHCYNanoBanana(),
+            responses=[dict(done)],
+            model="nano-banana-2",
+            aspect_ratio="16:9",
+            image_size="2K",
+        )
+        body = self.calls[0][2]
+        self.assertEqual(body["model"], "nano-banana-2")
+        self.assertEqual(body["aspect_ratio"], "16:9")
+        self.assertEqual(body["image_size"], "2K")
 
     def test_nano_banana_pro_keeps_model_and_aspect_payload(self):
         ratios = [

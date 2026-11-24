@@ -14,8 +14,10 @@ this file and editing the constants below.
 from __future__ import annotations
 
 try:
+    from .xhcy_client import XHCYError
     from .xhcy_image_base import XHCYImageBase
 except ImportError:  # allow running this file standalone for debugging
+    from xhcy_client import XHCYError  # type: ignore
     from xhcy_image_base import XHCYImageBase  # type: ignore
 
 
@@ -43,15 +45,22 @@ _MODEL_SIZES = {
     "gpt-image-2.5": _GPT25_BASE_SIZES,
 }
 
-# Base variant is documented as 1K-only; the two premium variants go to 4K.
+# Base variant is documented as 1K-only; the premium variants go to 4K.
+# 2.6 两个变体用下面同一张像素表：边长是 16 的倍数，长边不超过 3840，
+# 长短边不超过 3:1，像素数在 655360 到 8294400。表里每一档都落在这个范围。
 _RESOLUTION_LIMITS = {
     "gpt-image-2.5": ["1k"],
     "gpt-image-2.5-flare": ["1k", "2k", "4k"],
     "gpt-image-2.5-sunburst": ["1k", "2k", "4k"],
+    "gpt-image-2.6-flare": ["1k", "2k", "4k"],
+    "gpt-image-2.6-sunburst": ["1k", "2k", "4k"],
 }
 
-# auto = 不指定；xhigh / max 仅 -sunburst 支持
+# auto = 不指定；xhigh / max 只留给 2.5 -sunburst 的原下拉。
+# 2.6 只接受 auto / low / medium / high，其它档位在提交前停下。
 _QUALITIES = ["auto", "low", "medium", "high", "xhigh", "max"]
+_GPT26_MODELS = ("gpt-image-2.6-flare", "gpt-image-2.6-sunburst")
+_GPT26_QUALITIES = {"auto", "low", "medium", "high"}
 
 # (aspect_ratio, resolution) -> pixel size.
 # Constraints baked in: long edge <= 3840, both sides multiples of 16,
@@ -102,7 +111,13 @@ _SIZE_MAP: dict[tuple[str, str], str] = {
 class XHCYGPTImage25(XHCYImageBase):
     """GPT Image 2.5 family — text-to-image and multi-reference in one node."""
 
-    VARIANT_MODELS = ["gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]
+    VARIANT_MODELS = [
+        "gpt-image-2.5",
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.6-flare",
+        "gpt-image-2.6-sunburst",
+    ]
 
     MODEL_TOOLTIP = (
         "2026-10-29 实测（每张都下载图片量过像素）：\n"
@@ -113,7 +128,11 @@ class XHCYGPTImage25(XHCYImageBase):
         "实测 3840x2160 出 3840x2160\n"
         "· gpt-image-2.5-sunburst —— 同 -flare，另外画质可到 xhigh / max，"
         "实测 2160x3840 出 2160x3840\n"
-        "要 2K / 4K 请选 -flare 或 -sunburst。"
+        "要 2K / 4K 请选 -flare 或 -sunburst。\n"
+        "· gpt-image-2.6-flare / gpt-image-2.6-sunburst —— 同一张 14 画幅像素表。"
+        "画幅选 auto 时提交 size=auto。"
+        "画质只接受 auto / low / medium / high；"
+        "选到 xhigh 或 max 会在提交前停下，不会发出请求，也不会换成别的模型。"
     )
 
     RATIOS = _RATIOS
@@ -125,6 +144,8 @@ class XHCYGPTImage25(XHCYImageBase):
     RESOLUTION_LIMITS = _RESOLUTION_LIMITS
 
     QUALITIES = _QUALITIES
+    # 2.6 的 auto 是请求里的字面量 size，不能沿用 2.5「省略 size」的写法。
+    LITERAL_AUTO_SIZE_MODELS = _GPT26_MODELS
     # 默认选 -flare：基版只认 2 种尺寸，-flare 是 14 画幅 × 1K/2K/4K 全开
     DEFAULT_MODEL = "gpt-image-2.5-flare"
     DEFAULT_RATIO = "1:1"
@@ -133,9 +154,24 @@ class XHCYGPTImage25(XHCYImageBase):
     OUTPUT_PREFIX = "xhcy_gpt_image_25"
     CATEGORY = "XHCY/Image"
     DESCRIPTION = (
-        "XHCY AI · GPT Image 2.5 家族：不接参考图 = 文生图，"
+        "XHCY AI · GPT Image 2.5 / 2.6：不接参考图 = 文生图，"
         "接 image1~image16 = 多图参考生成"
     )
+
+    def allows_model_fallback(self, model: str) -> bool:
+        """2.6 解析失败时保持所选 ID，不静默换成 2.5。"""
+        return model not in _GPT26_MODELS
+
+    def guard_request(self, model, aspect_ratio, resolution, quality) -> None:
+        if model not in _GPT26_MODELS:
+            return
+        chosen = str(quality or "").strip().lower()
+        if chosen in ("",) or chosen in _GPT26_QUALITIES:
+            return
+        raise XHCYError(
+            f"{model} 的画质只接受 auto、low、medium、high。"
+            f"当前是「{quality}」，本次不会提交，也不会改成其它模型。"
+        )
 
 
 NODE_CLASS_MAPPINGS = {
@@ -143,5 +179,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "xhcy_gpt_image_25": "XHCY GPT Image 2.5（文生图 / 多图参考）",
+    "xhcy_gpt_image_25": "XHCY GPT Image 2.5 / 2.6（文生图 / 多图参考）",
 }
